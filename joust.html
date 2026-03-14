@@ -281,7 +281,7 @@ const WEBM_DRAW_H = Math.round(720  * WEBM_SCALE);          // ≈ 463 px
 const WEBM_OFF_X  = Math.round(WEBM_VASE_CX     * WEBM_SCALE); // ≈ 412 = WEBM_DRAW_W/2 → perfect center
 const WEBM_OFF_Y  = Math.round(WEBM_VASE_BOTTOM * WEBM_SCALE); // ≈ 425
 const WEBM_RAISE  = 0;
-const WEBM_DISPLAY_SCALE = 0.5;  // Video halb so groß anzeigen (Vase-Animation nicht zu riesig)
+const WEBM_DISPLAY_SCALE = 0.25;  // Video halb so groß anzeigen (Vase-Animation nicht zu riesig)
 let dragon = null;  // null = not flying
 let dragonCooldown = 1500;  // first dragon after ~25s (not in level 1)
 
@@ -1482,7 +1482,7 @@ function loop() {
     }
     if (inp.anyEdge) {
       titleMusicStarted=true;
-      ensureAudio(); startMusic(); initProlevel(); state='prolevel';
+      ensureAudio(); startMusic(); initGame(); state='playing';
     }
 
   } else if (state==='prolevel') {
