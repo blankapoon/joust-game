@@ -169,6 +169,11 @@ function playBonusFanfare() {
   [523, 659, 784, 1047].forEach((f, i) =>
     setTimeout(() => synthTone(f, 0.18, 0.20, 'square'), i * 110));
 }
+// 1-UP jingle for bonus life
+function playBonusLife() {
+  [784, 988, 1319, 1568, 1976].forEach((f, i) =>
+    setTimeout(() => synthTone(f, 0.16, 0.30, 'square'), i * 70));
+}
 
 // Background music
 const titleMusic = mkAudio('Audio/background_heroes_02.mp3', 0.22);
@@ -264,6 +269,7 @@ let paused = false;
 let levelTransition = 0;  // countdown frames for "LEVEL X" screen
 let roundKills = [0, 0, 0, 0];    // kills per enemy type this round (index = ti)
 let roundVasesCollected = 0;     // vases picked up this round
+let totalVasesCollected = 0;    // total vases this game (for bonus life)
 let roundEnemyTypes = new Set(); // which enemy types (ti) appeared this round
 let summaryData = null;
 
@@ -281,7 +287,7 @@ const WEBM_DRAW_H = Math.round(720  * WEBM_SCALE);          // ≈ 463 px
 const WEBM_OFF_X  = Math.round(WEBM_VASE_CX     * WEBM_SCALE); // ≈ 412 = WEBM_DRAW_W/2 → perfect center
 const WEBM_OFF_Y  = Math.round(WEBM_VASE_BOTTOM * WEBM_SCALE); // ≈ 425
 const WEBM_RAISE  = 0;
-const WEBM_DISPLAY_SCALE = 0.25;  // Video halb so groß anzeigen (Vase-Animation nicht zu riesig)
+const WEBM_DISPLAY_SCALE = 0.5;   // Vase-Spawn-Animation Größe
 let dragon = null;  // null = not flying
 let dragonCooldown = 1500;  // first dragon after ~25s (not in level 1)
 
@@ -534,6 +540,10 @@ function mkEnemy(ti, overrideX, overrideY) {
     e.cxOff=CYCLOP_PL_CX_OFF; e.ftOff=CYCLOP_PL_FT_OFF;
     e.headH=90; e.headYOff=-50;
     e.cyclopThrowTimer = 180 + Math.floor(Math.random() * 180);
+    e.cyclopMode = 'idle'; e.throwTimer = 0; e.rockSpawned = false;
+    const tv = document.createElement('video');
+    tv.src = 'cyclop_mate_throws_rock.webm'; tv.muted = true; tv.playsInline = true; tv.preload = 'auto';
+    e.throwVid = tv;
   }
   return e;
 }
@@ -574,6 +584,8 @@ function updateVaseSpawns() {
       if (overlaps(player, vRect)) {
         score += 200;
         if (v.fromSit) roundVasesCollected++;
+        totalVasesCollected++;
+        if (totalVasesCollected % 3 === 0) { lives++; playBonusLife(); boom(player.x+player.w/2, player.y, 20, ['#FFD700','#FFFFFF','#FF88FF','#00FFFF']); }
         sfxEgg();
         boom(v.spawnX + ENT_W/2, v.spawnY + ENT_H - VASE_H/2, 10, ['#FFD700','#FFAA00','#FF8800']);
         vaseSpawns.splice(i, 1);
@@ -755,11 +767,22 @@ function updateEnemies() {
     }
     // Cyclopen in Normal-Levels: Felsen werfen (Prolevel hat eigenen updateProlevelCyclop)
     if (e.ti === 3 && !e.isIdle && player) {
-      e.cyclopThrowTimer--;
-      if (e.cyclopThrowTimer <= 0) {
-        e.cyclopThrowTimer = 180 + Math.floor(Math.random() * 180);
-        spawnProRock(e);
-        const t = SND_CYCLOP_THROW.cloneNode(); t.volume = SND_CYCLOP_THROW.volume; t.play().catch(()=>{});
+      if (e.cyclopMode !== 'throwing') {
+        e.cyclopThrowTimer--;
+        if (e.cyclopThrowTimer <= 0) {
+          e.cyclopMode = 'throwing'; e.throwTimer = 0; e.rockSpawned = false;
+          e.throwVid.currentTime = 0; e.throwVid.play().catch(()=>{});
+          const t = SND_CYCLOP_THROW.cloneNode(); t.volume = SND_CYCLOP_THROW.volume; t.play().catch(()=>{});
+        }
+      } else {
+        e.throwTimer++;
+        if (!e.rockSpawned && e.throwTimer >= 60 && e.throwVid.currentTime >= 3.458) {
+          e.rockSpawned = true; spawnProRock(e);
+        }
+        if (e.throwVid.ended || e.throwTimer >= 380) {
+          e.cyclopMode = 'idle';
+          e.cyclopThrowTimer = 180 + Math.floor(Math.random() * 180);
+        }
       }
     }
     step(e);
@@ -807,6 +830,8 @@ function updateEggs() {
     if (player && overlaps(player,eg)) {
       score+=200;
       if (eg.fromSit) roundVasesCollected++;
+      totalVasesCollected++;
+      if (totalVasesCollected % 3 === 0) { lives++; playBonusLife(); boom(player.x+player.w/2, player.y, 20, ['#FFD700','#FFFFFF','#FF88FF','#00FFFF']); }
       boom(eg.x+eg.w/2,eg.y+eg.h/2,12,['#FFFF00','#FFCC00']);
       sfxEgg(); eggs.splice(i,1); continue;
     }
@@ -878,7 +903,7 @@ const LEVEL_WAVES = [3, 3, 3, 2, 2, 2, 2];
 
 function initGame() {
   score=0; lives=3; eggs=[]; particles=[]; vaseSpawns=[]; proRocks=[]; level=1; levelTransition=0; paused=false;
-  roundRestarting=false; roundWave=0; roundKills=[0,0,0]; roundVasesCollected=0; roundEnemyTypes=new Set(); summaryData=null;
+  roundRestarting=false; roundWave=0; roundKills=[0,0,0]; roundVasesCollected=0; roundEnemyTypes=new Set(); summaryData=null; totalVasesCollected=0;
   setLevelPlatforms(); spawnEnemies(); spawnPlayer();
 }
 
@@ -1362,8 +1387,8 @@ function drawEnemies() {
       ctx.save();
       ctx.translate(cx, bottom);
       if (!e.facingLeft) ctx.scale(-1, 1);
-      const activeVid = (e.cyclopMode === 'throwing' && cyclopThrowVid.readyState >= 2 && cyclopThrowVid.currentTime > 0.05)
-                        ? cyclopThrowVid : cyclopVid;
+      const activeVid = (e.cyclopMode === 'throwing' && e.throwVid && e.throwVid.readyState >= 2 && e.throwVid.currentTime > 0.05)
+                        ? e.throwVid : cyclopVid;
       if (activeVid.readyState >= 2) {
         ctx.drawImage(activeVid, -cO, -fO, dW, dH);
       } else {
