@@ -1,0 +1,1595 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Fantasy JOUST</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000; display:flex; justify-content:center; align-items:center;
+       min-height:100vh; overflow:hidden; }
+canvas { display:block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+'use strict';
+
+const W = 1920, H = 1080;
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+// ── Scale canvas to fit any screen ──────────────────────────
+function resize() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  canvas.style.width  = (W * s) + 'px';
+  canvas.style.height = (H * s) + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── Image loading + white-background removal ─────────────────
+function loadImg(src) {
+  const i = new Image();
+  i.onload  = () => console.log('✓ geladen:', src);
+  i.onerror = () => console.warn('✗ NICHT GEFUNDEN:', src);
+  i.src = src;
+  return i;
+}
+
+const RAW = {
+  bg:            loadImg('Background_01.png'),
+  blueBase:      loadImg('Knight_blue_base.png'),
+  blueUp:        loadImg('Knight_blue_moveup.png'),
+  greenBase:     loadImg('Knight_green_base.png'),
+  greenUp:       loadImg('Knight_green_moveup.png'),
+  redBase:       loadImg('Knight_red_base.png'),
+  redUp:         loadImg('Knight_red_moveup.png'),
+  banditBase:    loadImg('Bandit_base.png'),
+  banditUp:      loadImg('Bandit_moveup.png'),
+  dragonBase:    loadImg('Dragon_base.png'),
+  dragonMove:    loadImg('Dragon_move.png'),
+  featherKnight: loadImg('Feather_Knight.png'),
+  cover:         loadImg('Cover_Joust_of_might_and_magic.png'),
+  featherBandit: loadImg('Feather_bandit.png'),
+  vase:          loadImg('Vase_standing_still.png'),
+};
+
+// ── Background video ─────────────────────────────────────────
+const bgVideo = document.createElement('video');
+bgVideo.src = 'Background_lava.webm';
+bgVideo.loop = true;
+bgVideo.muted = false;
+bgVideo.volume = 0;
+bgVideo.muted = true;   // muted for autoplay on title; unmuted when game starts
+bgVideo.playsInline = true;
+bgVideo.preload = 'auto';
+bgVideo.play().catch(() => {});
+// video starts when user first interacts (inside startMusic)
+
+// ── Cyclops sprite video (VP9 WebM with alpha channel) ───────
+const cyclopVid = document.createElement('video');
+cyclopVid.src = 'Cyclop_idle_loop.webm';  // VP9 alpha – bereits transparent
+cyclopVid.muted = true; cyclopVid.playsInline = true;
+cyclopVid.preload = 'auto'; cyclopVid.play().catch(() => {});
+// Manueller Loop um Browser-Gap-Snap zu vermeiden
+cyclopVid.addEventListener('ended', () => { cyclopVid.currentTime = 0; cyclopVid.play().catch(() => {}); });
+
+// ── Cyclops throw animation (VP9 WebM, spielt einmal ab) ─────
+const cyclopThrowVid = document.createElement('video');
+cyclopThrowVid.src = 'cyclop_mate_throws_rock.webm';
+cyclopThrowVid.muted = true; cyclopThrowVid.playsInline = true;
+cyclopThrowVid.preload = 'auto';
+
+// ── Spinning rock projectile video (VP9 WebM, loop) ──────────
+const rockVid = document.createElement('video');
+rockVid.src = 'Rock_solo.webm';
+rockVid.loop = true; rockVid.muted = true; rockVid.playsInline = true;
+rockVid.preload = 'auto'; rockVid.play().catch(() => {});
+
+// ── Player sprite video (VP9 WebM with alpha channel) ────────
+const playerVid = document.createElement('video');
+playerVid.src = 'Knight_blue_flying.webm';
+playerVid.loop = true;
+playerVid.muted = true;
+playerVid.playsInline = true;
+playerVid.preload = 'auto';
+playerVid.play().catch(() => {});
+
+// Return image if loaded, null otherwise
+function getImg(key) {
+  const img = RAW[key];
+  return (img && img.complete && img.naturalWidth > 0) ? img : null;
+}
+
+// ── Sound ────────────────────────────────────────────────────
+function mkAudio(src, vol) {
+  const a = new Audio(src);
+  a.volume = vol;
+  return a;
+}
+// Preload sound banks
+const SND_FLAP = [
+  mkAudio('Audio/wing_flap_01.wav', 0.55),
+  mkAudio('Audio/wing_flap_02.wav', 0.55),
+];
+const SND_HIT = [
+  mkAudio('Audio/Hit_01.wav', 0.80),
+  mkAudio('Audio/Hit_02.wav', 0.80),
+  mkAudio('Audio/Hit_03.wav', 0.80),
+];
+const SND_DRAGON       = mkAudio('Audio/Dragon_flap.wav', 0.65);
+const SND_DRAGON_ROAR  = mkAudio('Audio/Dragon_roar.wav', 0.80);
+const SND_FALL         = mkAudio('Audio/Knight_fall_says_no_01.wav', 0.90);
+const SND_LOSE         = mkAudio('Audio/Knight_fall_lose_game_says_no_01.wav', 0.90);
+const SND_LEVEL_WIN    = mkAudio('Audio/Level_complete.wav', 0.85);
+const SND_VASE_SPAWN   = mkAudio('Audio/Vase_spawn_enemy.wav', 0.85);
+const SND_CYCLOP_IDLE  = mkAudio('Audio/cyclop_idle.wav', 0.75);
+SND_CYCLOP_IDLE.loop   = true;
+const SND_CYCLOP_THROW = mkAudio('Audio/cyclop_throw.wav', 0.85);
+
+function playRand(bank) {
+  const a = bank[Math.floor(Math.random() * bank.length)];
+  const c = a.cloneNode();
+  c.volume = a.volume;
+  c.play().catch(() => {});
+}
+
+function sfxFlap() { playRand(SND_FLAP); }
+function sfxHit()  { playRand(SND_HIT);  }
+function sfxEgg()  { playKillDing(); }
+function sfxDie()  { playRand(SND_HIT);  }
+
+// ── Web Audio synthesizer – bonus/reward sounds ──────────────
+let sfxAC = null;
+function getSfxAC() {
+  if (!sfxAC) sfxAC = new (window.AudioContext || window.webkitAudioContext)();
+  return sfxAC;
+}
+function synthTone(freq, dur, vol=0.22, type='square') {
+  try {
+    const ac = getSfxAC();
+    const osc = ac.createOscillator();
+    const g   = ac.createGain();
+    osc.connect(g); g.connect(ac.destination);
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ac.currentTime);
+    g.gain.setValueAtTime(vol, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    osc.start(ac.currentTime); osc.stop(ac.currentTime + dur);
+  } catch(e) {}
+}
+// Mario-style coin ding
+function playKillDing() {
+  synthTone(988,  0.07, 0.22, 'square');
+  setTimeout(() => synthTone(1319, 0.14, 0.18, 'square'), 75);
+}
+// Short ascending fanfare for level bonus
+function playBonusFanfare() {
+  [523, 659, 784, 1047].forEach((f, i) =>
+    setTimeout(() => synthTone(f, 0.18, 0.20, 'square'), i * 110));
+}
+
+// Background music
+const titleMusic = mkAudio('Audio/background_heroes_02.mp3', 0.22);
+titleMusic.loop = true;
+const bgMusic = mkAudio('Audio/background_heroes.mp3', 0.18);
+bgMusic.loop = true;
+let titleMusicStarted = false;
+
+function fadeAudio(audio, toVol, ms) {
+  const from = audio.volume, steps = 40, dt = ms / steps;
+  let s = 0;
+  const iv = setInterval(() => {
+    s++;
+    audio.volume = Math.max(0, Math.min(1, from + (toVol - from) * s / steps));
+    if (s >= steps) { clearInterval(iv); if (toVol === 0) { audio.pause(); audio.currentTime = 0; } }
+  }, dt);
+}
+
+function ensureAudio() {}   // kept for compatibility
+function startMusic() {
+  fadeAudio(titleMusic, 0, 1500);
+  bgMusic.volume = 0;
+  bgMusic.play().catch(() => {});
+  fadeAudio(bgMusic, 0.18, 1500);
+  bgVideo.muted = false;
+  fadeAudio(bgVideo, 0.12, 1500);
+}
+function stopMusic()  {
+  bgMusic.pause(); bgMusic.currentTime = 0;
+  bgVideo.muted = true; bgVideo.volume = 0;
+}
+
+// ── Constants ────────────────────────────────────────────────
+const GRAVITY    = 0.648;  // 10% weniger sinkend
+const FLAP_VY    = -17;
+const MAX_VY     = 26;
+const PLAYER_SPD = 10;
+const ENT_W      = 90;    // hitbox width  (75%)
+const ENT_H      = 60;    // hitbox height (75%)
+// Cyclops: ground enemy, 1280×720 video, character ≈ x320–870, y40–690
+const CYCLOP_W        = 120;   // hitbox width
+const CYCLOP_H        = 220;   // hitbox height
+const CYCLOP_DRAW_W   = 512;   // video draw width  (1280 * 0.4)
+const CYCLOP_DRAW_H   = 288;   // video draw height ( 720 * 0.4)
+const CYCLOP_CX_OFF   = 236;   // scaled char-center X offset from draw-left  (595*0.4)
+const CYCLOP_FOOT_OFF = 276;   // scaled char-feet  Y offset from draw-top   (690*0.4)
+const CYCLOP_HEAD_H   = 58;    // head hitbox height (top ~26% of CYCLOP_H)
+// Sprite: images are 1175×712 → ratio 1.650
+const SPR_W      = 268;   // sprite draw width  (enemies)
+const SPR_H      = 162;   // sprite draw height (enemies)
+// Player WebM video: 1280×720 (16:9), character smaller in frame due to wings
+const PVID_W     = 368;   // player video draw width  (+2%)
+const PVID_H     = 207;   // player video draw height (16:9, +2%)
+const PVID_FOOT  = 0.88;  // hooves are at 88% of frame height (adjust if floating)
+
+// ── Platforms ────────────────────────────────────────────────
+const GROUND = [
+  {x:  0,  y:920, w:540,  h:160},  // left ground
+  {x:1380, y:920, w:540,  h:160},  // right ground
+  {x: 700, y:876, w:520,  h: 44},  // lava bridge (center)
+];
+const LAVA_X = 540, LAVA_W = 840;
+
+// ── Prolevel constants ────────────────────────────────────────
+const PROLEVEL_PLAT    = [{x:0, y:920, w:W, h:160}];   // lückenloser Boden
+// Cyclops 2.0× Bandit-Sprite-Höhe: Charakter im Video ~650px hoch (720p-Quelle)
+// Füße liegen bei ~y=666 im 720p-Video (nicht 690)
+const CYCLOP_PL_SCALE  = (2.0 * SPR_H) / 650;          // ≈ 0.4985
+const CYCLOP_PL_DRAW_W = Math.round(1280 * CYCLOP_PL_SCALE);  // 542
+const CYCLOP_PL_DRAW_H = Math.round(720  * CYCLOP_PL_SCALE);  // 305
+const CYCLOP_PL_CX_OFF = Math.round(595  * CYCLOP_PL_SCALE);  // 252
+const CYCLOP_PL_FT_OFF = Math.round(666  * CYCLOP_PL_SCALE);  // 282 – korrigierter Fußpunkt
+const CYCLOP_PL_W      = Math.round(CYCLOP_W * CYCLOP_PL_SCALE / 0.4);   // 127
+const CYCLOP_PL_H      = Math.round(CYCLOP_H * CYCLOP_PL_SCALE / 0.4);   // 233
+// Floating islands per level (index 0 = level 1, etc.) — now 6 levels
+const LEVEL_ISLANDS = [
+  [],  // level 1: warm-up, keine Inseln, keine Troll-Hand
+  [],  // level 2: gleiche Plattformen, Troll-Hand aktiv
+  [ {x:760,  y:590, w:400, h:30} ],  // level 3: Mitte hoch
+  [ {x:220,  y:650, w:320, h:30}, {x:1380, y:650, w:320, h:30} ],  // level 4: zwei Seiten + Cyclop
+  [ {x:760,  y:490, w:380, h:30}, {x:160,  y:670, w:280, h:30}, {x:1480, y:670, w:280, h:30} ],  // level 5
+  [ {x:750,  y:420, w:420, h:30}, {x:240,  y:590, w:280, h:30}, {x:1400, y:590, w:280, h:30},   // level 6: 2 Cyclopen
+    {x:530,  y:730, w:210, h:30}, {x:1180, y:730, w:210, h:30} ],
+  [ {x:700,  y:380, w:520, h:30}, {x:150,  y:540, w:300, h:30}, {x:1470, y:540, w:300, h:30},   // level 7: Endlevel
+    {x:480,  y:680, w:240, h:30}, {x:1200, y:680, w:240, h:30}, {x:860, y:560, w:200, h:30} ],
+];
+let PLAT = [...GROUND];
+
+// ── State ────────────────────────────────────────────────────
+let state = 'title', score = 0, lives = 3, frame = 0, level = 1;
+let player = null, enemies = [], eggs = [], particles = [], vaseSpawns = [];
+let paused = false;
+let levelTransition = 0;  // countdown frames for "LEVEL X" screen
+let roundKills = [0, 0, 0, 0];    // kills per enemy type this round (index = ti)
+let roundVasesCollected = 0;     // vases picked up this round
+let roundEnemyTypes = new Set(); // which enemy types (ti) appeared this round
+let summaryData = null;
+
+// ── Dragon flyby ─────────────────────────────────────────────
+const DRAGON_W = 620, DRAGON_H = 134;  // 975×211 → ratio 4.62:1
+const VASE_W = 58, VASE_H = 90;       // vase draw size
+// Vase position within the 1280×720 WebM film frame:
+const WEBM_VASE_CX     = 640;   // vase is CENTERED in the frame (1280/2)
+const WEBM_VASE_BOTTOM = 660;   // vase bottom Y in the 720p frame
+const WEBM_VASE_PIX_W  = 90;    // vase pixel-width in the 720p frame
+// Derived – all auto-recalculate when VASE_W or WEBM_VASE_PIX_W changes:
+const WEBM_SCALE  = VASE_W / WEBM_VASE_PIX_W;              // ≈ 0.644
+const WEBM_DRAW_W = Math.round(1280 * WEBM_SCALE);          // ≈ 824 px
+const WEBM_DRAW_H = Math.round(720  * WEBM_SCALE);          // ≈ 463 px
+const WEBM_OFF_X  = Math.round(WEBM_VASE_CX     * WEBM_SCALE); // ≈ 412 = WEBM_DRAW_W/2 → perfect center
+const WEBM_OFF_Y  = Math.round(WEBM_VASE_BOTTOM * WEBM_SCALE); // ≈ 425
+const WEBM_RAISE  = 0;
+const WEBM_DISPLAY_SCALE = 0.5;  // Video halb so groß anzeigen (Vase-Animation nicht zu riesig)
+let dragon = null;  // null = not flying
+let dragonCooldown = 1500;  // first dragon after ~25s (not in level 1)
+
+function spawnDragon() {
+  const fromLeft = Math.random() < 0.5;
+  const y = 100 + Math.random() * 280;
+  const spd = 2.5 + Math.random() * 1.5;  // slow glide
+  dragon = {
+    x: fromLeft ? -DRAGON_W - 20 : W + 20,
+    y,
+    vx: fromLeft ? spd : -spd,
+    vy: 0,
+    flapAnim: 0,
+    flapTimer: 260,  // first flap soon after spawn
+  };
+}
+
+function updateDragon() {
+  if (!dragon) {
+    if (level < 2) return;  // kein Drache in Level 1
+    dragonCooldown--;
+    if (dragonCooldown === 420) {  // 7s vor Ankunft
+      const c = SND_DRAGON_ROAR.cloneNode(); c.volume=SND_DRAGON_ROAR.volume; c.play().catch(()=>{});
+    }
+    if (dragonCooldown <= 0) {
+      spawnDragon();
+      dragonCooldown = 1200 + Math.floor(Math.random() * 900);  // 20–35s zwischen Drachen
+    }
+    return;
+  }
+  // During flap: boost forward speed; otherwise normal glide
+  const flapBoost = dragon.flapAnim > 0 ? 1.8 : 1.0;
+  dragon.x += dragon.vx * flapBoost;
+
+  // Gently track player height – very weak pull, heavy damping = smooth glide
+  const targetY = player ? player.y - DRAGON_H * 0.5 : dragon.y;
+  const dy = targetY - dragon.y;
+  dragon.vy = dragon.vy * 0.985 + dy * 0.0018;  // much smoother, less swing
+  dragon.vy = Math.max(-2.5, Math.min(2.5, dragon.vy));  // clamp vertical speed
+  dragon.y += dragon.vy;
+
+  dragon.flapTimer++;
+  // flap every ~300 frames (5s): show Dragon_move (contracted) briefly, then back to glide
+  if (dragon.flapTimer >= 300 + Math.floor(Math.random() * 60)) {
+    dragon.flapTimer = 0;
+    dragon.flapAnim  = 120;  // 2 Sekunden bei 60fps = Dragon_move sichtbar
+    dragon.vy -= 0.8;       // tiny lift on flap
+    if (dragon.x > -DRAGON_W && dragon.x < W + DRAGON_W) {
+      const c = SND_DRAGON.cloneNode();
+      c.volume = SND_DRAGON.volume;
+      c.play().catch(() => {});
+    }
+  }
+  if (dragon.flapAnim > 0) dragon.flapAnim--;
+
+  // Kill player on contact
+  if (player && player.invincible === 0) {
+    const dx = (player.x + player.w/2) - (dragon.x + DRAGON_W/2);
+    const dy2 = (player.y + player.h/2) - (dragon.y + DRAGON_H/2);
+    if (Math.abs(dx) < DRAGON_W/2 - 30 && Math.abs(dy2) < DRAGON_H/2 + 10) {
+      diePlayer();
+    }
+  }
+
+  if (dragon.x > W + DRAGON_W + 20 || dragon.x < -DRAGON_W - 20) dragon = null;
+}
+
+function drawDragon() {
+  if (!dragon) return;
+  const img = getImg(dragon.flapAnim > 0 ? 'dragonMove' : 'dragonBase');
+  ctx.save();
+  ctx.translate(dragon.x + DRAGON_W / 2, dragon.y + DRAGON_H / 2);
+  if (dragon.vx > 0) ctx.scale(-1, 1);
+  if (img) {
+    ctx.drawImage(img, -DRAGON_W / 2, -DRAGON_H / 2, DRAGON_W, DRAGON_H);
+  } else {
+    ctx.fillStyle = '#885500';
+    ctx.fillRect(-DRAGON_W / 2, -DRAGON_H / 2, DRAGON_W, DRAGON_H);
+  }
+  ctx.restore();
+}
+let gameoverWait = 0;
+
+// ── Input ────────────────────────────────────────────────────
+const keys = {};
+const inp  = {left:false, right:false, flapEdge:false, anyEdge:false, spaceEdge:false, skipEdge:false};
+const prev = {flap:false, any:false, space:false, skip:false};
+
+document.addEventListener('keydown', e => {
+  if ([' ','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) e.preventDefault();
+  keys[e.key] = true;
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+window.addEventListener('gamepadconnected', e => { console.log('GP:', e.gamepad.id); });
+
+function readInput() {
+  inp.left  = !!(keys['ArrowLeft']  || keys['a'] || keys['A']);
+  inp.right = !!(keys['ArrowRight'] || keys['d'] || keys['D']);
+  const spaceDown = !!keys[' '];
+  inp.spaceEdge = spaceDown && !prev.space;
+  prev.space = spaceDown;
+  let flapK = !!(keys[' '] || keys['ArrowUp'] || keys['w'] || keys['W']);
+  let anyK  = flapK || inp.left || inp.right || !!keys['Enter'];
+
+  // Skip fake gamepads (headsets, unknown BT devices)
+  const SKIP_IDS = ['poly', 'bt700', 'headset', 'audio', 'headphone'];
+  const gpList = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (let gi = 0; gi < gpList.length; gi++) {
+    const gp = gpList[gi];
+    if (!gp) continue;
+    const id = gp.id.toLowerCase();
+    if (SKIP_IDS.some(s => id.includes(s))) continue;  // skip non-gamepads
+
+    const DZ = 0.50;
+    // Only axis 0 = horizontal (left/right). Iterating all axes causes drift
+    // because trigger/secondary axes rest at +1.0 on many gamepads.
+    const ax0 = gp.axes[0] ?? 0;
+    if (ax0 < -DZ) inp.left  = true;
+    if (ax0 >  DZ) inp.right = true;
+    // D-pad buttons (standard mapping: 14=left, 15=right, 12=up, 13=down)
+    if (gp.buttons[14]?.pressed || gp.buttons[14]?.value > 0.5) inp.left  = true;
+    if (gp.buttons[15]?.pressed || gp.buttons[15]?.value > 0.5) inp.right = true;
+    for (let bi = 0; bi < gp.buttons.length; bi++) {
+      if (bi >= 12 && bi <= 17) continue;
+      if (gp.buttons[bi]?.pressed || gp.buttons[bi]?.value > 0.5) { flapK=true; anyK=true; break; }
+    }
+    break;
+  }
+  inp.flapEdge = flapK && !prev.flap;
+  inp.anyEdge  = anyK  && !prev.any;
+  prev.flap = flapK; prev.any = anyK;
+  const skipDown = !!(keys['s'] || keys['S']);
+  inp.skipEdge = skipDown && !prev.skip;
+  prev.skip = skipDown;
+}
+
+// ── Physics ──────────────────────────────────────────────────
+function mkEnt(x, y, w, h) {
+  return {x, y, w, h, vx:0, vy:0, onGround:false, facingLeft:false};
+}
+
+function collide(e) {
+  e.onGround = false;
+  for (const p of PLAT) {
+    if (e.x+e.w <= p.x || e.x >= p.x+p.w) continue;
+    if (e.y+e.h > p.y && e.y < p.y+p.h) {
+      const em = e.y+e.h/2, pm = p.y+p.h/2;
+      if (em <= pm && e.vy >= 0) { e.y=p.y-e.h; e.vy=0; e.onGround=true; }
+      else if (em > pm && e.vy < 0) { e.y=p.y+p.h; e.vy=0; }
+    }
+  }
+  if (e.y+e.h > 920) {
+    const cx = e.x+e.w/2;
+    if (cx > LAVA_X && cx < LAVA_X+LAVA_W) return 'lava';
+    e.y = 920-e.h; e.vy=0; e.onGround=true;
+  }
+  if (e.y < 0) { e.y=0; e.vy=0; }
+  return null;
+}
+
+function step(e) {
+  e.vy = Math.min(e.vy+GRAVITY, MAX_VY);
+  e.y += e.vy; e.x += e.vx;
+  if (e.x+e.w < 0) e.x = W;
+  if (e.x > W)     e.x = -e.w;
+  return collide(e);
+}
+
+function overlaps(a, b) {
+  return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+}
+
+// ── Player ───────────────────────────────────────────────────
+function spawnPlayer() {
+  player = mkEnt(W/2 - ENT_W/2, 720, ENT_W, ENT_H);
+  player.flapAnim=0; player.invincible=150;
+}
+
+function updatePlayer() {
+  if (!player) return;
+  if (player.invincible > 0) player.invincible--;
+  if (inp.left)       { player.vx=Math.max(player.vx-1.1,-PLAYER_SPD); player.facingLeft=true;  }
+  else if (inp.right) { player.vx=Math.min(player.vx+1.1, PLAYER_SPD); player.facingLeft=false; }
+  else                { player.vx *= 0.84; }
+  if (inp.flapEdge)   { player.vy=FLAP_VY; player.flapAnim=12; sfxFlap(); }
+  if (player.flapAnim > 0) player.flapAnim--;
+  if (step(player) === 'lava') diePlayer();
+}
+
+function diePlayer() {
+  boomPlayerFeathers(player.x+player.w/2, player.y+player.h/2);
+  player=null;
+  // Prolevel: keine Lives kosten, einfach links respawnen
+  if (state === 'prolevel') {
+    const c = SND_FALL.cloneNode(); c.volume=SND_FALL.volume; c.play().catch(()=>{});
+    setTimeout(() => {
+      if (state === 'prolevel') {
+        player = mkEnt(150, 720, ENT_W, ENT_H);
+        player.flapAnim=0; player.invincible=90;
+      }
+    }, 1500);
+    return;
+  }
+  lives--;
+  if (lives <= 0) {
+    const c = SND_LOSE.cloneNode(); c.volume=SND_LOSE.volume; c.play().catch(()=>{});
+    setTimeout(()=>{ state='gameover'; gameoverWait=0; prev.flap=false; prev.any=false; }, 1500);
+  } else {
+    const c = SND_FALL.cloneNode(); c.volume=SND_FALL.volume; c.play().catch(()=>{});
+    setTimeout(()=>{ if(state==='playing') spawnPlayer(); }, 2000);
+  }
+}
+
+// ── Enemies ──────────────────────────────────────────────────
+const ETYPES = [
+  // tacticInt: [minFrames, maxFrames] between tactic checks; tacticChance: probability 0-1
+  {base:'greenBase',  up:'greenUp',  spd:3.5, fiMin:18, fiMax:40, feather:'featherKnight',
+   tacticInt:[520,820], tacticChance:0.18},  // 0: green  – slow, rarely clever
+  {base:'redBase',    up:'redUp',    spd:3.8, fiMin:16, fiMax:36, feather:'featherKnight',
+   tacticInt:[300,520], tacticChance:0.40},  // 1: red    – medium tactics
+  {base:'banditBase', up:'banditUp', spd:4.5, fiMin:10, fiMax:26, feather:'featherBandit',
+   tacticInt:[160,340], tacticChance:0.68},  // 2: bandit – frequent, aggressive
+  {base:'cyclop',    up:'cyclop',   spd:1.2, fiMin:9999, fiMax:9999, feather:'featherKnight',
+   tacticInt:[9999,9999], tacticChance:0.0}, // 3: cyclop – ground-only, lance-head kill
+];
+
+function mkEnemy(ti, overrideX, overrideY) {
+  roundEnemyTypes.add(ti);  // track which types appeared this round
+  const isCyclop = (ti === 3);
+  const hitW = isCyclop ? CYCLOP_PL_W : ENT_W;
+  const hitH = isCyclop ? CYCLOP_PL_H : ENT_H;
+  const cyclopSide = Math.floor(Math.random() * 2);  // 0=links, 1=rechts
+  const sp = isCyclop ? [GROUND[0], GROUND[1]][cyclopSide] : [GROUND[0], GROUND[1]][ti % 2];
+  const ex = (overrideX !== undefined) ? overrideX : sp.x + Math.random()*Math.max(0,sp.w-hitW);
+  const ey = (overrideY !== undefined) ? overrideY : sp.y-hitH;
+  const e  = mkEnt(ex, ey, hitW, hitH);
+  e.ti=ti; e.vx=(Math.random()<0.5?1:-1)*ETYPES[ti].spd;
+  e.facingLeft=e.vx<0; e.flapAnim=0;
+  e.flapTimer=0; e.nextFlapAt=isCyclop ? 99999 : Math.floor(Math.random()*ETYPES[ti].fiMax);
+  e.sitting=false; e.wantsToSit=false; e.sitTimer=0;
+  const _ti = ETYPES[ti].tacticInt;
+  e.tactic = 0; e.tacticDuration = 0;
+  e.tacticTimer = _ti[0] + Math.floor(Math.random() * (_ti[1] - _ti[0]));
+  const sitBase = isCyclop ? 99999 : Math.max(180, 920 - (level-1)*185);
+  e.sitCooldown = isCyclop ? 99999 : sitBase + Math.floor(Math.random() * sitBase * 0.55);
+  if (isCyclop) {
+    e.vx = 0;
+    e.facingLeft = (cyclopSide === 1);  // links=schaut rechts, rechts=schaut links
+    e.drawW=CYCLOP_PL_DRAW_W; e.drawH=CYCLOP_PL_DRAW_H;
+    e.cxOff=CYCLOP_PL_CX_OFF; e.ftOff=CYCLOP_PL_FT_OFF;
+    e.headH=90; e.headYOff=-50;
+    e.cyclopThrowTimer = 180 + Math.floor(Math.random() * 180);
+  }
+  return e;
+}
+
+// Lance tip: small rect at the front of the player (upper third of hitbox)
+function getLanceTip(p) {
+  return {
+    x: p.facingLeft ? p.x - 10 : p.x + p.w - 14,
+    y: p.y + p.h * 0.08,
+    w: 24, h: p.h * 0.48
+  };
+}
+
+function setLevelPlatforms() {
+  const islands = LEVEL_ISLANDS[Math.min(level-1, LEVEL_ISLANDS.length-1)] || [];
+  PLAT = [...GROUND, ...islands];
+}
+
+// ── Vase spawn system ─────────────────────────────────────────
+function mkVaseSpawn(ti) {
+  const sp = [GROUND[0], GROUND[1]][ti % 2];
+  const spawnX = sp.x + Math.random() * Math.max(0, sp.w - ENT_W);
+  const spawnY = sp.y - ENT_H;  // enemy feet land on platform
+  roundEnemyTypes.add(ti);
+  // Stagger timers: higher level = shorter wait; random offset avoids all at once
+  const baseWait = Math.max(80, 200 - (level - 1) * 25);
+  const waitFrames = baseWait + Math.floor(Math.random() * 100);
+  return { spawnX, spawnY, ti, phase: 'wait', waitTimer: waitFrames, flashTimer: 60, video: null, videoEnded: false };
+}
+
+function updateVaseSpawns() {
+  for (let i = vaseSpawns.length - 1; i >= 0; i--) {
+    const v = vaseSpawns[i];
+
+    // ── Player can collect a waiting vase ──────────────────────
+    if (v.phase === 'wait' && player && player.invincible === 0) {
+      const vRect = { x: v.spawnX + ENT_W/2 - VASE_W/2, y: v.spawnY + ENT_H - VASE_H, w: VASE_W, h: VASE_H };
+      if (overlaps(player, vRect)) {
+        score += 200;
+        if (v.fromSit) roundVasesCollected++;
+        sfxEgg();
+        boom(v.spawnX + ENT_W/2, v.spawnY + ENT_H - VASE_H/2, 10, ['#FFD700','#FFAA00','#FF8800']);
+        vaseSpawns.splice(i, 1);
+        continue;
+      }
+    }
+
+    if (v.phase === 'wait') {
+      if (v.flashTimer > 0) v.flashTimer--;
+      v.waitTimer--;
+      if (v.waitTimer <= 0) {
+        // All enemy types use the same WebM spawn animation
+        const c = SND_VASE_SPAWN.cloneNode(); c.volume = SND_VASE_SPAWN.volume; c.play().catch(()=>{});
+        const vid = document.createElement('video');
+        vid.src = 'Vase_spawn_Red_Knight.webm';
+        vid.muted = true;
+        vid.playsInline = true;
+        vid.addEventListener('ended', () => { v.videoEnded = true; });
+        vid.play().catch(() => { v.videoEnded = true; });
+        v.video = vid;
+        v.phase = 'anim';
+      }
+    } else if (v.phase === 'anim') {
+      if (v.videoEnded) v.phase = 'done';
+    }
+    if (v.phase === 'done') {
+      const e = mkEnemy(v.ti, v.spawnX, v.spawnY);
+      e.vy = -12;
+      enemies.push(e);
+      if (v.video) { v.video.pause(); v.video = null; }
+      vaseSpawns.splice(i, 1);
+    }
+  }
+}
+
+function drawVaseSpawns() {
+  for (const v of vaseSpawns) {
+    const cx     = v.spawnX + ENT_W / 2;
+    const bottom = v.spawnY + ENT_H;  // = platform top surface
+    if (v.phase === 'wait') {
+      const img = getImg('vase');
+      if (img) ctx.drawImage(img, cx - VASE_W / 2, bottom - VASE_H, VASE_W, VASE_H);
+      // Yellow multiply flash for first ~60 frames
+      if (v.flashTimer > 0 && Math.floor(v.flashTimer / 6) % 2 === 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalAlpha = 0.80;
+        ctx.fillStyle = '#FFE000';
+        ctx.fillRect(cx - VASE_W / 2, bottom - VASE_H, VASE_W, VASE_H);
+        ctx.restore();
+      }
+    } else if (v.phase === 'anim' && v.video && v.video.readyState >= 2) {
+      // Draw scaled WebM so the vase in the film lands at (cx, bottom).
+      // WEBM_SCALE = VASE_W / vase-pixels-in-frame → correct proportion, no squash.
+      const wS = WEBM_DISPLAY_SCALE;
+      ctx.drawImage(v.video, cx - WEBM_OFF_X*wS, bottom - WEBM_OFF_Y*wS - WEBM_RAISE, WEBM_DRAW_W*wS, WEBM_DRAW_H*wS);
+    }
+  }
+}
+
+function mkVaseSpawnAt(ti, x, y) {
+  roundEnemyTypes.add(ti);
+  return { spawnX: x, spawnY: y, ti, phase: 'wait',
+           waitTimer: 40 + Math.floor(Math.random() * 40),
+           flashTimer: 45, video: null, videoEnded: false };
+}
+
+function spawnEnemies() {
+  const counts = [
+    [0,1],          // level 1: warm-up
+    [0,1],          // level 2: + Troll-Hand
+    [2,2,2],        // level 3: 3 Banditen
+    [2,2,2,3],      // level 4: + 1 Cyclop am Rand
+    [2,2,2,3],      // level 5: + 1 Cyclop am Rand
+    [2,2,2,3,3],    // level 6: 2 Cyclopen
+    [2,2,2,3,3],    // level 7: 2 Cyclopen
+  ];
+  const cfg = counts[Math.min(level-1, counts.length-1)];
+  // Clean up any in-flight spawn videos before replacing the array
+  for (const v of vaseSpawns) { if (v.video) { v.video.pause(); v.video = null; } }
+  vaseSpawns = [];
+  proRocks = [];  // Felsen beim Wellenwechsel löschen
+  enemies = cfg.map(ti => mkEnemy(ti));
+}
+
+function updateEnemies() {
+  for (let i = enemies.length-1; i >= 0; i--) {
+    const e = enemies[i];
+    const et = ETYPES[e.ti];
+    // ── Sitting behaviour ──────────────────────────────────────
+    if (e.sitting) {
+      e.vx = 0;
+      step(e);
+      e.sitTimer--;
+      if (e.sitTimer <= 0) {
+        // lay egg on platform surface
+        const eg = mkEnt(e.x + ENT_W*0.15, e.y, 44, 56);
+        eg.ti=e.ti; eg.timer=0; eg.maxTimer=400; eg.vx=0; eg.vy=0; eg.fromSit=true;
+        eggs.push(eg);
+        e.sitting=false; e.wantsToSit=false;
+        e.sitCooldown = 300 + Math.floor(Math.random()*400);
+      }
+      if (player && player.invincible===0 && overlaps(player,e)) {
+        const pT=player.y+player.h*0.35, eT=e.y+e.h*0.35;
+        if (pT < eT-10) {
+          score+=(e.ti+1)*125; boomFeathers(e.x+e.w/2,e.y+e.h/2,e.ti);
+          roundKills[e.ti]++; enemies.splice(i,1); sfxHit();
+        } else diePlayer();
+      }
+      continue;
+    }
+    // sit cooldown runs every frame
+    if (!e.sitting) {
+      e.sitCooldown--;
+      if (e.sitCooldown <= 0) e.wantsToSit = true;
+      // once wantsToSit, wait for landing then commit
+      if (e.wantsToSit && e.onGround) {
+        e.sitting=true; e.wantsToSit=false; e.sitTimer=65;
+        e.vx=0; e.vy=0;
+      }
+    }
+
+    e.flapTimer++;
+    const nearCeiling = e.y < 160;
+    // suppress ground-flap when wanting to land and sit
+    const nearGround  = e.onGround && !e.wantsToSit;
+    const wantsHigher = !e.wantsToSit && player && e.y > player.y + 80;
+    const nextFlap    = e.nextFlapAt ?? 0;
+    if (!e.isIdle && !e.wantsToSit && (e.flapTimer >= nextFlap || (nearGround && e.flapTimer > 8))) {
+      // new random interval for the NEXT flap
+      e.nextFlapAt = et.fiMin + Math.floor(Math.random() * (et.fiMax - et.fiMin));
+      e.flapTimer  = 0;
+      if (nearCeiling) {
+        // near ceiling: weak flap or skip entirely so gravity pulls them down
+        if (Math.random() < 0.35) { e.vy = FLAP_VY * 0.30; e.flapAnim = 8; }
+      } else if (wantsHigher) {
+        e.vy = FLAP_VY * (0.85 + Math.random() * 0.15);
+        e.flapAnim = 12;
+      } else {
+        // mid-air: vary strength so they bob up and down
+        e.vy = FLAP_VY * (0.45 + Math.random() * 0.45);
+        e.flapAnim = 12;
+      }
+    }
+    if (e.flapAnim > 0) e.flapAnim--;
+
+    // ── Tactic AI ─────────────────────────────────────────────
+    e.tacticTimer--;
+    if (e.tacticTimer <= 0) {
+      const ti_int = et.tacticInt;
+      e.tacticTimer = ti_int[0] + Math.floor(Math.random() * (ti_int[1] - ti_int[0]));
+      if (!e.wantsToSit && player && Math.random() < et.tacticChance) {
+        e.tactic = Math.random() < 0.5 ? 1 : 2;
+        e.tacticDuration = 55 + Math.floor(Math.random() * 65);  // ~1–2s
+      }
+    }
+    if (e.tacticDuration > 0) { e.tacticDuration--; if (e.tacticDuration <= 0) e.tactic = 0; }
+
+    if (player) {
+      const dx = (player.x + player.w/2) - (e.x + e.w/2);
+      if (e.tactic === 1) {
+        // Feint: move AWAY from player
+        e.vx -= Math.sign(dx) * 0.16;
+      } else {
+        // Normal + tactic 2: chase player horizontally
+        e.vx += Math.sign(dx) * 0.12;
+      }
+      e.vx = Math.max(-et.spd, Math.min(et.spd, e.vx));
+      e.facingLeft = e.vx < 0;
+      // Tactic 2: burst upward when below player
+      if (e.tactic === 2 && e.y > player.y + 60 && e.vy > -4 && !e.onGround) {
+        e.vy = FLAP_VY * (0.75 + Math.random() * 0.22);
+        e.flapAnim = 14;
+      }
+    }
+    if (e.isIdle || e.ti === 3) {
+      e.vx = 0;
+      e.facingLeft = (e.x + e.w/2) > W/2;  // Cyclop schaut immer zur Mitte
+    }
+    // Cyclopen in Normal-Levels: Felsen werfen (Prolevel hat eigenen updateProlevelCyclop)
+    if (e.ti === 3 && !e.isIdle && player) {
+      e.cyclopThrowTimer--;
+      if (e.cyclopThrowTimer <= 0) {
+        e.cyclopThrowTimer = 180 + Math.floor(Math.random() * 180);
+        spawnProRock(e);
+        const t = SND_CYCLOP_THROW.cloneNode(); t.volume = SND_CYCLOP_THROW.volume; t.play().catch(()=>{});
+      }
+    }
+    step(e);
+
+    if (player && player.invincible===0 && overlaps(player,e)) {
+      if (e.ti === 3) {
+        // ── Cyclops: only lance tip hitting head kills it ──────
+        const tip  = getLanceTip(player);
+        const head = { x: e.x + e.w*0.15, y: e.y + (e.headYOff ?? 0), w: e.w*0.70, h: e.headH ?? CYCLOP_HEAD_H };
+        if (overlaps(tip, head)) {
+          score += 500;
+          boomFeathers(e.x+e.w/2, e.y+e.h/2, 0);
+          roundKills[3]++;
+          const eg = mkEnt(e.x+CYCLOP_W*0.3, e.y+CYCLOP_H*0.3, 44, 56);
+          eg.ti=3; eg.timer=0; eg.maxTimer=290; eg.fromSit=false;
+          eg.vy=-10; eg.vx=(Math.random()-0.5)*5;
+          eggs.push(eg); enemies.splice(i,1); sfxHit();
+        } else {
+          diePlayer();  // body hit → player dies
+        }
+      } else {
+        const pT=player.y+player.h*0.35, eT=e.y+e.h*0.35;
+        if (pT < eT-10) {
+          score += (e.ti+1)*125;
+          boomFeathers(e.x+e.w/2, e.y+e.h/2, e.ti);
+          const eg = mkEnt(e.x+ENT_W*0.3, e.y+ENT_H*0.3, 44, 56);
+          eg.ti=e.ti; eg.timer=0; eg.maxTimer=290; eg.fromSit=false;
+          eg.vy=-10; eg.vx=(Math.random()-0.5)*5;
+          roundKills[e.ti]++; eggs.push(eg); enemies.splice(i,1); sfxHit();
+        } else if (eT < pT-10) {
+          diePlayer();
+        } else {
+          player.vx += player.x<e.x ? -5 : 5;
+          e.vx      += e.x<player.x ? -5 : 5;
+        }
+      }
+    }
+  }
+}
+
+// ── Eggs ─────────────────────────────────────────────────────
+function updateEggs() {
+  for (let i = eggs.length-1; i >= 0; i--) {
+    const eg=eggs[i]; eg.timer++; step(eg);
+    if (player && overlaps(player,eg)) {
+      score+=200;
+      if (eg.fromSit) roundVasesCollected++;
+      boom(eg.x+eg.w/2,eg.y+eg.h/2,12,['#FFFF00','#FFCC00']);
+      sfxEgg(); eggs.splice(i,1); continue;
+    }
+    if (eg.timer >= eg.maxTimer) {
+      if (state !== 'prolevel') {
+        const vs = mkVaseSpawnAt(eg.ti, eg.x, eg.y + eg.h - ENT_H);
+        vs.fromSit = eg.fromSit || false;
+        vaseSpawns.push(vs);
+      }
+      eggs.splice(i, 1);
+    }
+  }
+}
+
+// ── Particles ────────────────────────────────────────────────
+function boom(x, y, n, colors) {
+  for (let i=0; i<n; i++) {
+    const a=Math.random()*Math.PI*2, s=4+Math.random()*8, l=40+Math.random()*35;
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-4,life:l,maxLife:l,
+                    color:colors[i%colors.length]});
+  }
+}
+function boomFeathers(x, y, enemyTi) {
+  const key = ETYPES[enemyTi]?.feather ?? 'featherKnight';
+  for (let i=0; i<18; i++) {
+    const a=Math.random()*Math.PI*2, s=3+Math.random()*9;
+    const l=45+Math.random()*40;
+    particles.push({
+      x, y,
+      vx: Math.cos(a)*s, vy: Math.sin(a)*s - 5,
+      life:l, maxLife:l,
+      imgKey: key,
+      scale: 0.25 + Math.random()*0.65,
+      rot:   Math.random()*Math.PI*2,
+      rotSpd:(Math.random()-0.5)*0.25,
+    });
+  }
+}
+function boomPlayerFeathers(x, y) {
+  for (let i=0; i<20; i++) {
+    const a=Math.random()*Math.PI*2, s=3+Math.random()*9;
+    const l=50+Math.random()*40;
+    particles.push({
+      x, y,
+      vx: Math.cos(a)*s, vy: Math.sin(a)*s - 5,
+      life:l, maxLife:l,
+      imgKey: 'featherKnight',
+      scale: 0.25 + Math.random()*0.65,
+      rot:   Math.random()*Math.PI*2,
+      rotSpd:(Math.random()-0.5)*0.25,
+    });
+  }
+}
+function updateParticles() {
+  for (let i=particles.length-1; i>=0; i--) {
+    const p=particles[i]; p.vy+=0.45; p.x+=p.vx; p.y+=p.vy; p.life--;
+    if (p.rotSpd) p.rot += p.rotSpd;
+    if (p.life<=0) particles.splice(i,1);
+  }
+}
+
+// ── Level ────────────────────────────────────────────────────
+let roundRestarting = false;
+let proLevelResetting = false;
+let proRocks = [];  // fliegende Felsen im Prolevel
+let roundWave = 0;  // how many waves have been completed this round
+// How many waves of enemies per level (more waves = longer level)
+const LEVEL_WAVES = [3, 3, 3, 2, 2, 2, 2];
+
+function initGame() {
+  score=0; lives=3; eggs=[]; particles=[]; vaseSpawns=[]; proRocks=[]; level=1; levelTransition=0; paused=false;
+  roundRestarting=false; roundWave=0; roundKills=[0,0,0]; roundVasesCollected=0; roundEnemyTypes=new Set(); summaryData=null;
+  setLevelPlatforms(); spawnEnemies(); spawnPlayer();
+}
+
+// ── Prolevel: Cyclops Wurf-Ablauf ────────────────────────────
+function updateProlevelCyclop(e) {
+  if (e.cyclopMode === 'idle') {
+    e.idleTimer--;
+    if (e.idleTimer <= 0) {
+      e.cyclopMode = 'throwing';
+      e.throwTimer = 0;
+      e.rockSpawned = false;
+      cyclopThrowVid.currentTime = 0;
+      cyclopThrowVid.play().catch(() => {});
+      SND_CYCLOP_IDLE.pause(); SND_CYCLOP_IDLE.currentTime = 0;
+      const t = SND_CYCLOP_THROW.cloneNode(); t.volume = SND_CYCLOP_THROW.volume; t.play().catch(() => {});
+    }
+  } else if (e.cyclopMode === 'throwing') {
+    e.throwTimer++;
+    // Rock spawnt bei 3:11 @ 24fps = 3.458s; throwTimer >= 60 verhindert Frühzünder
+    if (!e.rockSpawned && e.throwTimer >= 60 && cyclopThrowVid.currentTime >= 3.458) {
+      e.rockSpawned = true;
+      spawnProRock(e);
+    }
+    // Zurück zu Idle wenn Video fertig oder Timeout
+    if (cyclopThrowVid.ended || e.throwTimer >= 380) {
+      e.cyclopMode = 'idle';
+      e.idleTimer = 180 + Math.floor(Math.random() * 120); // 3–5 Sekunden
+      SND_CYCLOP_IDLE.currentTime = 0; SND_CYCLOP_IDLE.play().catch(() => {});
+    }
+  }
+}
+
+function spawnProRock(e) {
+  const cx_e  = e.x + e.w / 2;
+  const dW    = e.drawW  ?? CYCLOP_PL_DRAW_W;
+  const dH    = e.drawH  ?? CYCLOP_PL_DRAW_H;
+  const cxOff = e.cxOff  ?? CYCLOP_PL_CX_OFF;
+  const ftOff = e.ftOff  ?? CYCLOP_PL_FT_OFF;
+  const drawTop = (e.y + e.h) - ftOff;
+  // Hand-Position spiegeln je nach Blickrichtung
+  const handOffX = (300 / 1280) * dW + 20;
+  const spawnX = e.facingLeft
+    ? (cx_e - cxOff) + handOffX          // schaut links: Hand links vom Körper
+    : (cx_e + cxOff) - handOffX;         // schaut rechts: gespiegelt
+  const spawnY = drawTop + (155 / 720) * dH - 20;
+  // Richtung zum Spieler berechnen, Fallback auf Blickrichtung
+  let vx, vy;
+  const ROCK_SPEED = 22;
+  if (player) {
+    const dx = (player.x + player.w / 2) - spawnX;
+    const dy = (player.y + player.h / 2) - spawnY;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    vx = (dx / len) * ROCK_SPEED;
+    vy = (dy / len) * ROCK_SPEED;
+  } else {
+    vx = e.facingLeft ? -ROCK_SPEED : ROCK_SPEED;
+    vy = 0;
+  }
+  // Max 50° vom Boden aus (kein Senkrechtswurf)
+  if (vy < 0) {
+    const MAX_ANG = 50 * Math.PI / 180;
+    const maxUp = Math.tan(MAX_ANG) * Math.abs(vx);
+    if (-vy > maxUp) {
+      const sign = vx < 0 ? -1 : 1;
+      vx = sign * ROCK_SPEED * Math.cos(MAX_ANG);
+      vy = -ROCK_SPEED * Math.sin(MAX_ANG);
+    }
+  }
+  proRocks.push({ x: spawnX, y: spawnY, vx, vy, onGround: false });
+}
+
+const PROLEVEL_FLOOR_Y = 920;  // Oberkante des Prolevel-Bodens
+
+function updateProRocks() {
+  for (let i = proRocks.length - 1; i >= 0; i--) {
+    const r = proRocks[i];
+    if (r.onGround) {
+      // Auf Boden: rutschen mit wenig Reibung, nur off-screen entfernen
+      r.vx *= 0.97;
+      r.x  += r.vx;
+    } else {
+      r.vy += 0.15;
+      r.x  += r.vx;
+      r.y  += r.vy;
+      // Boden-Kollision
+      if (r.y >= PROLEVEL_FLOOR_Y) {
+        r.y = PROLEVEL_FLOOR_Y;
+        r.vy = 0;
+        r.onGround = true;
+      }
+    }
+    // Treffer auf Spieler
+    if (player && player.invincible === 0) {
+      const rRect = { x: r.x - 55, y: r.y - 45, w: 110, h: 90 };
+      if (overlaps(player, rRect)) {
+        proRocks.splice(i, 1);
+        diePlayer();
+        continue;
+      }
+    }
+    // Fels verschwindet wenn off-screen
+    if (r.x < -200 || r.x > W + 200) proRocks.splice(i, 1);
+  }
+}
+
+// Rock_solo.webm: 1280×720, Stein zentriert bei ca. x=640, y=415, Größe ~320×230px
+// Skalierung so dass Stein ~80px hoch erscheint: 80/230 ≈ 0.348
+const ROCK_DRAW_W = Math.round(1280 * (80 / 230));  // 445
+const ROCK_DRAW_H = Math.round(720  * (80 / 230));  // 251
+const ROCK_CX_OFF = Math.round(640  * (80 / 230));  // 223  (Steinmitte x → draw-Ursprung)
+const ROCK_CY_OFF = Math.round(415  * (80 / 230));  // 144  (Steinmitte y → draw-Ursprung)
+
+function drawProRocks() {
+  if (rockVid.readyState < 2) return;
+  for (const r of proRocks) {
+    ctx.drawImage(rockVid, r.x - ROCK_CX_OFF, r.y - ROCK_CY_OFF, ROCK_DRAW_W, ROCK_DRAW_H);
+  }
+}
+
+function initProlevel() {
+  eggs=[]; particles=[]; vaseSpawns=[]; proRocks=[]; proLevelResetting=false; paused=false;
+  PLAT = [...PROLEVEL_PLAT];
+  // Spieler links spawnen
+  player = mkEnt(150, 720, ENT_W, ENT_H);
+  player.flapAnim=0; player.invincible=90;
+  // Cyclops rechts – idle, regungslos, 1.5× Bandit-Größe
+  const cx = mkEnt(1500, 920 - CYCLOP_PL_H, CYCLOP_PL_W, CYCLOP_PL_H);
+  cx.ti=3; cx.vx=0; cx.facingLeft=true; cx.isIdle=true;
+  cx.flapAnim=0; cx.flapTimer=0; cx.nextFlapAt=99999;
+  cx.sitting=false; cx.wantsToSit=false; cx.sitTimer=0;
+  cx.tactic=0; cx.tacticDuration=0; cx.tacticTimer=99999; cx.sitCooldown=99999;
+  cx.drawW=CYCLOP_PL_DRAW_W; cx.drawH=CYCLOP_PL_DRAW_H;
+  cx.cxOff=CYCLOP_PL_CX_OFF; cx.ftOff=CYCLOP_PL_FT_OFF;
+  cx.headH=90; cx.headYOff=-50; // Kopf-Hitbox 50px über Entity-Top (Sprite überragt Hitbox oben)
+  cx.cyclopMode='idle'; cx.idleTimer=180; cx.throwTimer=0; cx.rockSpawned=false;
+  enemies = [cx];
+  SND_CYCLOP_IDLE.currentTime = 0; SND_CYCLOP_IDLE.play().catch(() => {});
+}
+
+function checkRoundDone() {
+  if (enemies.length===0 && eggs.length===0 && vaseSpawns.length===0 && state==='playing' && !roundRestarting) {
+    roundRestarting = true;
+    roundWave++;
+    const totalWaves = LEVEL_WAVES[Math.min(level-1, LEVEL_WAVES.length-1)];
+    if (roundWave < totalWaves) {
+      // More waves – seamlessly continue after short pause
+      setTimeout(() => {
+        if (state === 'playing') { spawnEnemies(); roundRestarting = false; }
+      }, 2200);
+    } else {
+      // All waves done – show summary
+      const c = SND_LEVEL_WIN.cloneNode(); c.volume=SND_LEVEL_WIN.volume; c.play().catch(()=>{});
+      setTimeout(() => triggerSummary(), 700);
+    }
+  }
+}
+
+function triggerSummary() {
+  player = null; paused = false;  // clear stage; unpause in case it was paused
+  particles = [];  // clear any remaining feathers/particles for clean screen
+  summaryData = {
+    kills:         [...roundKills],
+    activeTypes:   [...roundEnemyTypes].sort(),
+    vasesCollected: roundVasesCollected,
+    levelBonus:    250 * level,
+    animFrame:     0,
+    dingPlayed:    {},
+    bonusAdded:    {},
+    fanfarePlayed:     false,
+    levelBonusAdded:   false,
+  };
+  prev.flap = true; prev.any = true;  // prevent instant skip
+  state = 'summary';
+}
+
+// Called when player presses a key to leave summary
+function advanceAfterSummary() {
+  summaryData = null;
+  roundKills = [0, 0, 0, 0];
+  roundVasesCollected = 0;
+  roundEnemyTypes = new Set();
+  roundWave = 0;
+  roundRestarting = true;  // prevent checkRoundDone from firing during transition
+  if (level < 6) {
+    level++;
+    levelTransition = 300;
+    setLevelPlatforms();
+    state = 'playing';
+    setTimeout(() => { spawnEnemies(); spawnPlayer(); roundRestarting = false; }, 5000);
+  } else {
+    state = 'playing';
+    setTimeout(() => { spawnEnemies(); spawnPlayer(); roundRestarting = false; }, 1800);
+  }
+}
+
+const SUMMARY_TYPES = [
+  { baseKey: 'greenBase',  label: 'Grüner Ritter', color: '#88FF88', bonus:  50 },
+  { baseKey: 'redBase',    label: 'Roter Ritter',  color: '#FF7777', bonus: 125 },
+  { baseKey: 'banditBase', label: 'Bandit',        color: '#FFAA44', bonus: 200 },
+  { baseKey: 'cyclop',     label: 'Cyclops',       color: '#CC8800', bonus: 500 },
+];
+const VASE_SUMMARY_BONUS = 25;  // bonus per collected vase in summary
+
+function drawSummary() {
+  const sd = summaryData;
+  sd.animFrame++;
+
+  drawBg(); drawAllPlats(); drawLava();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Panel (wide enough that sprites stay inside) ────────────
+  const PX = 240, PY = 130, PW = 1440, PH = 750;
+  ctx.strokeStyle = '#C87000'; ctx.lineWidth = 10;
+  ctx.strokeRect(PX, PY, PW, PH);
+  ctx.fillStyle = 'rgba(0,0,0,0.94)';
+  ctx.fillRect(PX + 5, PY + 5, PW - 10, PH - 10);
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 58px serif';
+  ctx.fillText('⚔  RUNDE ' + level + ' ABGESCHLOSSEN  ⚔', W / 2, PY + 72);
+  ctx.fillStyle = '#AAAAAA'; ctx.font = '26px serif';
+  ctx.fillText('Besiegte Gegner', W / 2, PY + 110);
+
+  // ── Dynamic rows – enemy types + optional vase row ──────────
+  const numRows   = sd.activeTypes.length;
+  const hasVases  = sd.vasesCollected > 0;
+  const totalRows = numRows + (hasVases ? 1 : 0);
+  const listH     = PH - 190 - 90;
+  const rowH      = Math.min(105, Math.floor(listH / Math.max(totalRows, 1)));
+  const scale   = Math.min(1.0, rowH / 105);
+  const sW      = Math.round(148 * scale);                 // sprite draw width
+  const sH      = Math.round(90  * scale);                 // sprite draw height
+  const fsName  = Math.max(22, Math.round(38 * scale));    // name font
+  const fsCount = Math.max(26, Math.round(46 * scale));    // ×N font
+  const fsBonus = Math.max(18, Math.round(30 * scale));    // +pts font
+
+  // Column X positions
+  const ICON_CX  = PX + 80 + sW / 2;   // sprite center x
+  const NAME_X   = PX + 170 + sW;      // name text left
+  const COUNT_X  = PX + PW - 360;      // ×N left
+  const BONUS_X  = PX + PW - 200;      // +pts left
+
+  let rowTop = PY + 150;               // top of first row area
+
+  for (let ri = 0; ri < numRows; ri++) {
+    const ti = sd.activeTypes[ri];
+    const revealAt = 40 + ri * 80;
+    if (sd.animFrame < revealAt) { rowTop += rowH; continue; }
+
+    // Add bonus to score once on reveal
+    if (!sd.dingPlayed[ti]) {
+      sd.dingPlayed[ti] = true;
+      if (sd.kills[ti] > 0) {
+        score += sd.kills[ti] * SUMMARY_TYPES[ti].bonus;
+        sd.bonusAdded[ti] = true;
+        playKillDing();
+      }
+    }
+
+    const t   = SUMMARY_TYPES[ti];
+    const img = getImg(t.baseKey);
+    const rowMid = rowTop + rowH / 2;
+
+    // Sprite icon (face right toward text, sprites are left-facing by default)
+    ctx.save();
+    ctx.translate(ICON_CX, rowMid + sH * 0.5);
+    ctx.scale(-1, 1);
+    if (img) ctx.drawImage(img, -sW / 2, -sH, sW, sH);
+    else { ctx.fillStyle = t.color; ctx.fillRect(-sW / 2, -sH / 2, sW, sH / 2); }
+    ctx.restore();
+
+    // Name
+    ctx.textAlign = 'left';
+    ctx.fillStyle = sd.kills[ti] > 0 ? t.color : '#666666';
+    ctx.font = `bold ${fsName}px serif`;
+    ctx.fillText(t.label, NAME_X, rowMid + fsName * 0.38);
+
+    // ×count
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `bold ${fsCount}px monospace`;
+    ctx.fillText('×' + sd.kills[ti], COUNT_X, rowMid + fsCount * 0.38);
+
+    // Bonus pts
+    if (sd.kills[ti] > 0) {
+      ctx.fillStyle = '#FFD700';
+      ctx.font = `bold ${fsBonus}px monospace`;
+      ctx.fillText('+' + (sd.kills[ti] * t.bonus), BONUS_X, rowMid + fsBonus * 0.38);
+    }
+
+    rowTop += rowH;
+  }
+
+  // ── Vase row ─────────────────────────────────────────────────
+  const vaseRevealAt = 40 + numRows * 80;
+  if (hasVases && sd.animFrame >= vaseRevealAt) {
+    if (!sd.dingPlayed['vase']) {
+      sd.dingPlayed['vase'] = true;
+      score += sd.vasesCollected * VASE_SUMMARY_BONUS;
+      playKillDing();
+    }
+    const vaseImg = getImg('vase');
+    const vW = Math.round(VASE_W * scale), vH = Math.round(VASE_H * scale);
+    const rowMid = rowTop + rowH / 2;
+    if (vaseImg) ctx.drawImage(vaseImg, ICON_CX - vW / 2, rowMid - vH / 2, vW, vH);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#FFD700'; ctx.font = `bold ${fsName}px serif`;
+    ctx.fillText('Gesammelte Vasen', NAME_X, rowMid + fsName * 0.38);
+    ctx.fillStyle = '#FFFFFF'; ctx.font = `bold ${fsCount}px monospace`;
+    ctx.fillText('×' + sd.vasesCollected, COUNT_X, rowMid + fsCount * 0.38);
+    ctx.fillStyle = '#FFD700'; ctx.font = `bold ${fsBonus}px monospace`;
+    ctx.fillText('+' + (sd.vasesCollected * VASE_SUMMARY_BONUS), BONUS_X, rowMid + fsBonus * 0.38);
+    rowTop += rowH;
+  }
+
+  // ── Level bonus ─────────────────────────────────────────────
+  const levelBonusAt = vaseRevealAt + (hasVases ? 80 : 0);
+  if (sd.animFrame >= levelBonusAt) {
+    if (!sd.fanfarePlayed)    { sd.fanfarePlayed = true; playBonusFanfare(); }
+    if (!sd.levelBonusAdded)  { sd.levelBonusAdded = true; score += sd.levelBonus; }
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFD700'; ctx.font = 'bold 46px serif';
+    ctx.fillText('✦  LEVEL BONUS:  +' + sd.levelBonus + '  ✦', W / 2, PY + PH - 44);
+  }
+
+  // ── Continue prompt ──────────────────────────────────────────
+  if (sd.animFrame > levelBonusAt + 80) {
+    const pulse = 0.5 + 0.5 * Math.sin(sd.animFrame * 0.09);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#FFFF00'; ctx.font = 'bold 34px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('▶  DRÜCKE EINE TASTE ZUM WEITERSPIELEN  ◀', W / 2, H - 68);
+    ctx.globalAlpha = 1;
+    if (inp.anyEdge) advanceAfterSummary();
+  }
+
+  ctx.textAlign = 'left';
+}
+
+// ── Drawing ──────────────────────────────────────────────────
+function drawBg() {
+  if (bgVideo.readyState >= 2) {
+    ctx.drawImage(bgVideo, 0, 0, W, H);
+  } else {
+    const bg = RAW.bg;
+    if (bg.complete && bg.naturalWidth > 0) {
+      ctx.drawImage(bg, 0, 0, W, H);
+    } else {
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#000033'); g.addColorStop(1,'#110000');
+      ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    }
+  }
+}
+
+function fillRR(x, y, w, h, r, color) {
+  r = Math.min(r, w/2, h/2);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y);  ctx.arcTo(x+w, y,   x+w, y+r,   r);
+  ctx.lineTo(x+w, y+h-r); ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+  ctx.lineTo(x+r, y+h);   ctx.arcTo(x,   y+h, x,   y+h-r, r);
+  ctx.lineTo(x, y+r);     ctx.arcTo(x,   y,   x+r, y,     r);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawPlatform(p, isMain) {
+  const r = isMain ? 12 : 10;
+  fillRR(p.x, p.y, p.w, p.h, r, '#7A3600');
+  const th = isMain ? 12 : 8;
+  fillRR(p.x, p.y, p.w, th, r, isMain ? '#D86A00' : '#C06000');
+  fillRR(p.x, p.y, p.w, isMain?4:3, r, isMain ? '#F07800' : '#E07000');
+  ctx.fillStyle = '#A05000';
+  ctx.fillRect(p.x+r, p.y+th, p.w-r*2, isMain?8:5);
+  ctx.fillStyle = '#3E1800';
+  ctx.fillRect(p.x+r, p.y+p.h-6, p.w-r*2, 6);
+}
+
+function drawAllPlats() {
+  drawPlatform(GROUND[0], true);
+  drawPlatform(GROUND[1], true);
+  drawPlatform(GROUND[2], false);
+  const islands = LEVEL_ISLANDS[Math.min(level-1, LEVEL_ISLANDS.length-1)] || [];
+  for (const isl of islands) drawPlatform(isl, false);
+}
+
+function drawLava() {
+  const ly=920, t=frame*0.04;
+  for (let x=LAVA_X; x<LAVA_X+LAVA_W; x+=8) {
+    const wave=Math.sin(x*0.025+t)*7;
+    const g=ctx.createLinearGradient(x,ly+wave,x,H);
+    g.addColorStop(0,'#FF4400'); g.addColorStop(0.5,'#CC1100'); g.addColorStop(1,'#770000');
+    ctx.fillStyle=g; ctx.fillRect(x,ly+wave,8,H-ly-wave+8);
+  }
+  ctx.fillStyle='rgba(255,60,0,0.10)'; ctx.fillRect(LAVA_X,ly-50,LAVA_W,50);
+  ctx.fillStyle='#770000'; ctx.fillRect(0,H-28,W,28);
+
+  // Lava troll hand (not in level 1 warm-up)
+  const ph=Math.sin(frame*0.012);
+  if (level <= 1) return;
+  if (ph>0.55) {
+    const rise=(ph-0.55)/0.45;
+    const hx=LAVA_X+LAVA_W*0.5-26, hy=ly-rise*120;
+    ctx.fillStyle='#991100';
+    ctx.fillRect(hx,    hy+38, 52,56);
+    ctx.fillRect(hx,    hy+4,  12,38);
+    ctx.fillRect(hx+13, hy-10, 12,52);
+    ctx.fillRect(hx+27, hy-10, 12,52);
+    ctx.fillRect(hx+41, hy+4,  12,38);
+  }
+}
+
+function checkTrollHand() {
+  if (level <= 1) return;  // no troll in warm-up level
+  const ph = Math.sin(frame * 0.012);
+  if (ph <= 0.55) return;
+  const rise = (ph - 0.55) / 0.45;
+  const handY = 920 - rise * 120;  // top of hand
+  const handX = LAVA_X + LAVA_W * 0.5 - 26;
+  const handW = 52;
+  // kill player if touching hand
+  if (player && player.invincible === 0) {
+    const px = player.x + player.w/2;
+    if (px > handX && px < handX + handW && player.y + player.h > handY) {
+      diePlayer();
+    }
+  }
+}
+
+// Draw knight sprite – multiply blend removes white bg on dark backgrounds
+function drawKnight(cx, cy, facingLeft, flapAnim, baseKey, upKey) {
+  const img = getImg(flapAnim > 0 ? upKey : baseKey);
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (!facingLeft) ctx.scale(-1, 1);
+  if (img) {
+    ctx.drawImage(img, -SPR_W/2, -SPR_H, SPR_W, SPR_H);
+  } else {
+    const col = baseKey.includes('blue') ? '#2244CC'
+              : baseKey.includes('green') ? '#228822' : '#CC2222';
+    ctx.fillStyle = col;
+    ctx.fillRect(-ENT_W/2, -ENT_H, ENT_W, ENT_H);
+  }
+  ctx.restore();
+}
+
+function drawPlayer() {
+  if (!player) return;
+  if (player.invincible>0 && Math.floor(player.invincible/6)%2===0) return;
+  const cx = player.x + player.w/2;
+  const cy = player.y + player.h;
+  // Speed up animation during flap, slow back to normal
+  playerVid.playbackRate = player.flapAnim > 0 ? 2.0 : 1.0;
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (!player.facingLeft) ctx.scale(-1, 1);  // same convention as drawKnight
+  if (playerVid.readyState >= 2) {
+    // Draw so hooves align with platform: top = -(PVID_H * PVID_FOOT), bottom = +rest below
+    ctx.drawImage(playerVid, -PVID_W/2, -PVID_H * PVID_FOOT, PVID_W, PVID_H);
+  } else {
+    // Fallback to static sprite while video loads
+    const img = getImg(player.flapAnim > 0 ? 'blueUp' : 'blueBase');
+    if (img) ctx.drawImage(img, -SPR_W/2, -SPR_H, SPR_W, SPR_H);
+    else { ctx.fillStyle = '#2244CC'; ctx.fillRect(-ENT_W/2, -ENT_H, ENT_W, ENT_H); }
+  }
+  ctx.restore();
+}
+
+function drawEnemies() {
+  for (const e of enemies) {
+    if (e.ti === 3) {
+      const cx = e.x + e.w/2, bottom = e.y + e.h;
+      const dW = e.drawW ?? CYCLOP_DRAW_W;
+      const dH = e.drawH ?? CYCLOP_DRAW_H;
+      const cO = e.cxOff ?? CYCLOP_CX_OFF;
+      const fO = e.ftOff ?? CYCLOP_FOOT_OFF;
+      ctx.save();
+      ctx.translate(cx, bottom);
+      if (!e.facingLeft) ctx.scale(-1, 1);
+      const activeVid = (e.cyclopMode === 'throwing' && cyclopThrowVid.readyState >= 2 && cyclopThrowVid.currentTime > 0.05)
+                        ? cyclopThrowVid : cyclopVid;
+      if (activeVid.readyState >= 2) {
+        ctx.drawImage(activeVid, -cO, -fO, dW, dH);
+      } else {
+        ctx.fillStyle = '#8B4513';
+        ctx.fillRect(-dW/2, -dH, dW, dH);
+      }
+      ctx.restore();
+    } else {
+      drawKnight(e.x+e.w/2, e.y+e.h, e.facingLeft, e.flapAnim,
+                 ETYPES[e.ti].base, ETYPES[e.ti].up);
+    }
+  }
+}
+
+function drawEggs() {
+  for (const eg of eggs) {
+    const cx = eg.x + eg.w / 2;
+    const bottom = eg.y + eg.h;
+    const img = getImg('vase');
+    if (img) ctx.drawImage(img, cx - VASE_W / 2, bottom - VASE_H, VASE_W, VASE_H);
+    else { ctx.fillStyle='#AA8800'; ctx.fillRect(cx-VASE_W/2, bottom-VASE_H, VASE_W, VASE_H); }
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = p.life / p.maxLife;
+    if (p.imgKey) {
+      const img = getImg(p.imgKey);
+      if (img) {
+        const sz = 32 * p.scale;
+        ctx.save();
+        ctx.translate(~~p.x, ~~p.y);
+        ctx.rotate(p.rot);
+        ctx.drawImage(img, -sz/2, -sz/2, sz, sz);
+        ctx.restore();
+      }
+    } else {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(~~p.x-4, ~~p.y-4, 8, 8);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD() {
+  // Score
+  ctx.font='bold 36px serif'; ctx.textAlign='left';
+  ctx.fillStyle='rgba(0,0,0,0.5)';
+  ctx.fillRect(20,14,340,52);
+  ctx.fillStyle='#FFD700'; ctx.fillText('SCORE: '+score+'   LEVEL: '+level, 30, 52);
+
+  // Lives
+  ctx.textAlign='right';
+  ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(W-360,14,340,52);
+  ctx.fillStyle='#FFFFFF'; ctx.fillText('LEBEN:', W-200, 52);
+  for (let i=0; i<lives; i++) {
+    const img = getImg('blueBase');
+    if (img) ctx.drawImage(img, W-185+i*58, 8, 52, 64);
+    else {
+      ctx.fillStyle='#4466FF'; ctx.fillRect(W-185+i*58, 14, 46, 44);
+    }
+  }
+  ctx.textAlign='left';
+}
+
+function drawOverlay(title, tc, l2, l3) {
+  ctx.fillStyle='rgba(0,0,0,0.82)'; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='#C87000'; ctx.lineWidth=5;
+  ctx.strokeRect(310,280,1300,520);
+  ctx.fillStyle='rgba(0,0,0,0.94)'; ctx.fillRect(315,285,1290,510);
+  ctx.textAlign='center';
+  ctx.fillStyle=tc; ctx.font='bold 120px serif'; ctx.fillText(title, W/2,460);
+  ctx.fillStyle='#FFD700'; ctx.font='bold 46px serif'; ctx.fillText(l2, W/2,570);
+  if(l3){ctx.fillStyle='#888'; ctx.font='30px monospace'; ctx.fillText(l3, W/2,648);}
+  ctx.textAlign='left';
+}
+
+function drawTitle() {
+  // Darkened video background
+  if (bgVideo.readyState >= 2) {
+    ctx.drawImage(bgVideo, 0, 0, W, H);
+    ctx.fillStyle = 'rgba(0,0,0,0.52)';
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  }
+  // Cover image on top, slightly transparent so video shines through
+  const cover = getImg('cover');
+  if (cover) {
+    ctx.globalAlpha = 0.88;
+    ctx.drawImage(cover, 0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+  // Pulsing "press to start" text at bottom
+  const pulse = 0.6 + 0.4 * Math.sin(frame * 0.07);
+  ctx.globalAlpha = pulse;
+  ctx.textAlign='center';
+  ctx.fillStyle='#FFFF00'; ctx.font='bold 44px monospace';
+  ctx.shadowColor='#FF8800'; ctx.shadowBlur=20;
+  ctx.fillText('DRÜCKE EINE TASTE ZUM STARTEN', W/2, H - 60);
+  ctx.shadowBlur=0;
+  ctx.globalAlpha=1;
+  ctx.textAlign='left';
+}
+
+// ── Main loop ────────────────────────────────────────────────
+function loop() {
+  frame++; readInput(); ctx.clearRect(0,0,W,H);
+  try {
+
+  if (state==='title') {
+    drawTitle();
+    if (!titleMusicStarted) {
+      titleMusic.play().then(()=>{ titleMusicStarted=true; }).catch(()=>{});
+    }
+    if (inp.anyEdge) {
+      titleMusicStarted=true;
+      ensureAudio(); startMusic(); initProlevel(); state='prolevel';
+    }
+
+  } else if (state==='prolevel') {
+    // Leertaste = Pause (flapEdge verbrauchen damit Spieler nicht gleichzeitig flappt)
+    if (inp.spaceEdge) {
+      paused = !paused;
+      inp.flapEdge = false; prev.flap = true;
+      // DEBUG: resume videos when unpausing
+      if (!paused) { cyclopThrowVid.play().catch(()=>{}); rockVid.play().catch(()=>{}); }
+    }
+    drawBg();
+    // Lückenloser Boden – keine Lava
+    drawPlatform(PROLEVEL_PLAT[0], true);
+    if (!paused) {
+      updatePlayer(); updateEnemies(); updateEggs(); updateParticles();
+      for (const e of enemies) { if (e.isIdle) updateProlevelCyclop(e); }
+      updateProRocks();
+      // Nach Cyclops-Tod: Prolevel zurücksetzen
+      if (enemies.length===0 && eggs.length===0 && !proLevelResetting) {
+        proLevelResetting = true;
+        setTimeout(() => { if (state==='prolevel') initProlevel(); }, 1800);
+      }
+    }
+    drawParticles(); drawEggs(); drawEnemies(); drawProRocks(); drawPlayer();
+    // HUD Prolevel
+    ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(20,14,720,52);
+    ctx.fillStyle='#FFD700'; ctx.font='bold 34px serif'; ctx.textAlign='left';
+    ctx.fillText('PROBE-LEVEL  —  Triff den Kopf des Cyclops!', 30, 52);
+    ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(W-440,14,420,52);
+    ctx.fillStyle='#AAFFAA'; ctx.font='bold 30px monospace'; ctx.textAlign='right';
+    ctx.fillText('[S] = Level 1 starten', W-20, 52);
+    ctx.textAlign='left';
+    // Pause overlay
+    if (paused) {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#FFD700'; ctx.font = 'bold 100px serif';
+      ctx.fillText('⏸  PAUSE', W/2, H/2);
+      ctx.fillStyle = '#AAAAAA'; ctx.font = '32px monospace';
+      ctx.fillText('Leertaste zum Weiterspielen', W/2, H/2 + 70);
+      ctx.textAlign = 'left';
+    }
+    // S zum Überspringen (Edge damit kein sofort-Skip beim Prolevel-Reset)
+    if (inp.skipEdge) { SND_CYCLOP_IDLE.pause(); initGame(); state='playing'; }
+
+  } else if (state==='playing') {
+    // Space key only = pause toggle; consume flapEdge so player doesn't also flap
+    if (inp.spaceEdge) { paused = !paused; inp.flapEdge = false; prev.flap = true; }
+
+    drawBg(); drawAllPlats(); drawLava();
+    if (!paused) {
+      updatePlayer(); updateEnemies(); updateEggs(); updateVaseSpawns(); updateParticles(); checkTrollHand(); updateDragon(); updateProRocks();
+      checkRoundDone();
+    }
+    drawDragon(); drawParticles(); drawEggs(); drawVaseSpawns(); drawEnemies(); drawProRocks(); drawPlayer(); drawHUD();
+    // Level advance overlay
+    if (levelTransition > 0) {
+      if (!paused) levelTransition--;
+      const a = Math.min(1, levelTransition / 40);
+      ctx.fillStyle = `rgba(0,0,0,${a * 0.65})`;
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 120px serif';
+      ctx.fillStyle = `rgba(255,215,0,${a})`;
+      ctx.fillText('LEVEL ' + level, W/2, H/2);
+      ctx.font = 'bold 42px serif';
+      ctx.fillStyle = `rgba(255,255,255,${a})`;
+      ctx.fillText(level <= 2 ? 'Viel Erfolg!' : 'Neue Plattform erscheint!', W/2, H/2 + 80);
+      ctx.textAlign = 'left';
+    }
+    // Pause overlay
+    if (paused) {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#FFD700'; ctx.font = 'bold 100px serif';
+      ctx.fillText('⏸  PAUSE', W/2, H/2);
+      ctx.fillStyle = '#AAAAAA'; ctx.font = '32px monospace';
+      ctx.fillText('Leertaste zum Weiterspielen', W/2, H/2 + 70);
+      ctx.textAlign = 'left';
+    }
+
+  } else if (state==='summary') {
+    drawSummary();
+
+  } else if (state==='gameover') {
+    gameoverWait++;
+    if (gameoverWait===1) stopMusic();
+    drawBg(); drawAllPlats(); drawLava();
+    drawOverlay('GAME OVER','#FF2222','FINAL SCORE: '+score,
+                gameoverWait>80 ? 'Taste / Knopf = Nochmal' : '...');
+    if (gameoverWait>80 && inp.anyEdge) {
+      ensureAudio(); startMusic(); initGame(); state='playing';
+    }
+  }
+
+  } catch(err) {
+    ctx.fillStyle='rgba(0,0,0,0.92)'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#FF4444'; ctx.font='bold 30px monospace'; ctx.textAlign='left';
+    ctx.fillText('JS FEHLER: ' + err.message, 20, 60);
+    ctx.fillStyle='#FFAAAA'; ctx.font='20px monospace';
+    (err.stack||'').split('\n').slice(0,8).forEach((l,i)=>ctx.fillText(l.slice(0,110),20,110+i*28));
+    console.error('[LOOP]', err);
+  }
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
