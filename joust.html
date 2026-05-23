@@ -276,10 +276,10 @@ let summaryData = null;
 // ── Dragon flyby ─────────────────────────────────────────────
 const DRAGON_W = 620, DRAGON_H = 134;  // 975×211 → ratio 4.62:1
 const VASE_W = 58, VASE_H = 90;       // vase draw size
-// Vase position within the 1280×720 WebM film frame:
-const WEBM_VASE_CX     = 640;   // vase is CENTERED in the frame (1280/2)
-const WEBM_VASE_BOTTOM = 660;   // vase bottom Y in the 720p frame
-const WEBM_VASE_PIX_W  = 90;    // vase pixel-width in the 720p frame
+// Vase position within the 1280×720 WebM film frame (per pixel scan):
+const WEBM_VASE_CX     = 636;   // bbox center x (vase actually ~4px left of center)
+const WEBM_VASE_BOTTOM = 719;   // vase bottom Y – sits at the very bottom of the frame
+const WEBM_VASE_PIX_W  = 126;   // vase pixel-width (handles to handles) in the 720p frame
 // Derived – all auto-recalculate when VASE_W or WEBM_VASE_PIX_W changes:
 const WEBM_SCALE  = VASE_W / WEBM_VASE_PIX_W;              // ≈ 0.644
 const WEBM_DRAW_W = Math.round(1280 * WEBM_SCALE);          // ≈ 824 px
@@ -287,7 +287,7 @@ const WEBM_DRAW_H = Math.round(720  * WEBM_SCALE);          // ≈ 463 px
 const WEBM_OFF_X  = Math.round(WEBM_VASE_CX     * WEBM_SCALE); // ≈ 412 = WEBM_DRAW_W/2 → perfect center
 const WEBM_OFF_Y  = Math.round(WEBM_VASE_BOTTOM * WEBM_SCALE); // ≈ 425
 const WEBM_RAISE  = 0;
-const WEBM_DISPLAY_SCALE = 0.78;   // Vase-Spawn-Animation Größe
+const WEBM_DISPLAY_SCALE = 1.0;    // 1.0 = Anim-Vase exakt so groß wie Standvase
 let dragon = null;  // null = not flying
 let dragonCooldown = 1500;  // first dragon after ~25s (not in level 1)
 
