@@ -297,6 +297,50 @@ let spawnTimer = 0;              // frames bis nächster Spawn
 const SPAWN_INTERVAL_DEFAULT = 120;  // 2s zwischen normalen Gegner-Spawns
 const SPAWN_INTERVAL_CYCLOP  = 180;  // 3s zwischen 2 Cyclopen
 
+// ── Hall of Fame & Name-Auswahl ──────────────────────────────
+const PLAYER_NAMES = ['Danny', 'Helmut', 'Stephan', 'Rüdi', 'Micha', 'Andy', 'Holger', 'André'];
+let currentPlayer = PLAYER_NAMES[0];
+let nameSelectCursor = 0;
+let gameOverRecorded = false;    // verhindert doppeltes Speichern eines Scores
+let justRecordedIndex = -1;      // Position des frisch gespeicherten Scores in der HOF-Liste
+const HOF_KEY = 'joust_hall_of_fame_v1';
+const HOF_MAX_ENTRIES = 20;
+
+function loadHOF() {
+  try { return JSON.parse(localStorage.getItem(HOF_KEY) || '[]'); }
+  catch { return []; }
+}
+function saveHOF(hof) {
+  try { localStorage.setItem(HOF_KEY, JSON.stringify(hof)); } catch (e) {}
+}
+function recordScore(name, sc, lvl) {
+  const hof = loadHOF();
+  const entry = { name, score: sc, level: lvl, date: Date.now() };
+  hof.push(entry);
+  hof.sort((a, b) => b.score - a.score);
+  const trimmed = hof.slice(0, HOF_MAX_ENTRIES);
+  saveHOF(trimmed);
+  justRecordedIndex = trimmed.indexOf(entry);
+}
+
+// ── Klick-Handling (für Name-Select und HOF-Button) ──────────
+let lastClick = null;
+let clickRegions = [];  // { x, y, w, h, action, payload }
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  lastClick = {
+    x: (e.clientX - rect.left) * W / rect.width,
+    y: (e.clientY - rect.top)  * H / rect.height,
+  };
+});
+function consumeClickIn(r) {
+  if (!lastClick) return false;
+  const hit = lastClick.x >= r.x && lastClick.x < r.x+r.w &&
+              lastClick.y >= r.y && lastClick.y < r.y+r.h;
+  if (hit) lastClick = null;
+  return hit;
+}
+
 // ── Dragon flyby ─────────────────────────────────────────────
 const DRAGON_W = 620, DRAGON_H = 134;  // 975×211 → ratio 4.62:1
 const VASE_W = 58, VASE_H = 90;       // vase draw size
@@ -397,8 +441,10 @@ let gameoverWait = 0;
 
 // ── Input ────────────────────────────────────────────────────
 const keys = {};
-const inp  = {left:false, right:false, flapEdge:false, anyEdge:false, spaceEdge:false, skipEdge:false};
-const prev = {flap:false, any:false, space:false, skip:false};
+const inp  = {left:false, right:false, flapEdge:false, anyEdge:false, spaceEdge:false, skipEdge:false,
+              leftEdge:false, rightEdge:false, upEdge:false, downEdge:false, enterEdge:false};
+const prev = {flap:false, any:false, space:false, skip:false,
+              left:false, right:false, up:false, down:false, enter:false};
 
 document.addEventListener('keydown', e => {
   if ([' ','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) e.preventDefault();
@@ -446,6 +492,19 @@ function readInput() {
   const skipDown = !!(keys['s'] || keys['S']);
   inp.skipEdge = skipDown && !prev.skip;
   prev.skip = skipDown;
+  // Edge-Erkennung für Menü-Navigation
+  const upDown    = !!(keys['ArrowUp']);
+  const downDown  = !!(keys['ArrowDown']);
+  const leftDown  = !!(keys['ArrowLeft']  || keys['a'] || keys['A']);
+  const rightDown = !!(keys['ArrowRight'] || keys['d'] || keys['D']);
+  const enterDown = !!(keys['Enter']);
+  inp.upEdge    = upDown    && !prev.up;
+  inp.downEdge  = downDown  && !prev.down;
+  inp.leftEdge  = leftDown  && !prev.left;
+  inp.rightEdge = rightDown && !prev.right;
+  inp.enterEdge = enterDown && !prev.enter;
+  prev.up = upDown; prev.down = downDown;
+  prev.left = leftDown; prev.right = rightDown; prev.enter = enterDown;
 }
 
 // ── Physics ──────────────────────────────────────────────────
@@ -1526,6 +1585,16 @@ function drawHUD() {
   ctx.fillRect(20,14,340,52);
   ctx.fillStyle='#FFD700'; ctx.fillText('SCORE: '+score+'   LEVEL: '+level, 30, 52);
 
+  // Spieler-Name mittig oben
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(0,0,0,0.4)';
+  const nameBoxW = 280;
+  ctx.fillRect(W/2 - nameBoxW/2, 14, nameBoxW, 44);
+  ctx.fillStyle='#FFCC44';
+  ctx.font='bold 26px serif';
+  ctx.fillText('► ' + currentPlayer + ' ◄', W/2, 46);
+  ctx.textAlign='left'; ctx.font='bold 36px serif';
+
   // Lives — Icons skalieren dynamisch, damit auch viele Leben reinpassen
   ctx.textAlign='right';
   ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(W-360,14,340,52);
@@ -1579,6 +1648,231 @@ function drawOverlay(title, tc, l2, l3) {
   ctx.textAlign='left';
 }
 
+// Hilfsfunktion: abgerundetes Rechteck mit Border (für Menü-Buttons)
+function drawButton(x, y, w, h, label, selected, fontSize) {
+  const r = 14;
+  const pulse = 0.85 + 0.15 * Math.sin(frame * 0.15);
+  // Hintergrund
+  ctx.fillStyle = selected ? `rgba(255, 200, 60, ${0.22 * pulse})` : 'rgba(0, 0, 0, 0.55)';
+  fillRR(x, y, w, h, r, ctx.fillStyle);
+  // Border
+  ctx.strokeStyle = selected ? '#FFD700' : '#888888';
+  ctx.lineWidth = selected ? 5 : 2;
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y);  ctx.arcTo(x+w, y,   x+w, y+r,   r);
+  ctx.lineTo(x+w, y+h-r); ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+  ctx.lineTo(x+r, y+h);   ctx.arcTo(x,   y+h, x,   y+h-r, r);
+  ctx.lineTo(x, y+r);     ctx.arcTo(x,   y,   x+r, y,     r);
+  ctx.closePath();
+  ctx.stroke();
+  // Label
+  ctx.fillStyle = selected ? '#FFFFFF' : '#DDDDDD';
+  ctx.font = `bold ${fontSize}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, x + w/2, y + h/2);
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawNameSelect() {
+  // Hintergrund (Titel-Video gedimmt)
+  if (bgVideo.readyState >= 2) {
+    ctx.drawImage(bgVideo, 0, 0, W, H);
+    ctx.fillStyle = 'rgba(0,0,0,0.62)';
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  }
+  // Überschrift
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 84px serif';
+  ctx.shadowColor = '#FF8800'; ctx.shadowBlur = 26;
+  ctx.fillText('Wer spielt?', W/2, 180);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#DDDDDD'; ctx.font = '30px serif';
+  ctx.fillText('Wähle deinen Namen für die Hall of Fame', W/2, 230);
+
+  // Grid: 4 Spalten × 2 Reihen
+  const cols = 4, rows = 2;
+  const cellW = 320, cellH = 150, gap = 30;
+  const gridW = cols * cellW + (cols - 1) * gap;
+  const gridLeft = (W - gridW) / 2;
+  const gridTop  = 320;
+
+  clickRegions = [];
+  for (let i = 0; i < PLAYER_NAMES.length; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = gridLeft + col * (cellW + gap);
+    const y = gridTop  + row * (cellH + gap);
+    const selected = (i === nameSelectCursor);
+    drawButton(x, y, cellW, cellH, PLAYER_NAMES[i], selected, selected ? 54 : 46);
+    clickRegions.push({ x, y, w: cellW, h: cellH, action: 'name', payload: i });
+  }
+
+  // Start-Button
+  const startX = (W - 480) / 2, startY = gridTop + rows * (cellH + gap) + 30;
+  const startSel = (nameSelectCursor === PLAYER_NAMES.length);
+  drawButton(startX, startY, 480, 88, '▶  SPIEL STARTEN', startSel, 42);
+  clickRegions.push({ x: startX, y: startY, w: 480, h: 88, action: 'start' });
+
+  // Hinweis-Zeile
+  ctx.fillStyle = '#999999'; ctx.font = '22px monospace';
+  ctx.fillText('Pfeiltasten · Enter zum Bestätigen · oder einfach klicken', W/2, H - 60);
+  ctx.textAlign = 'left';
+}
+
+function updateNameSelect() {
+  const cols = 4;
+  const total = PLAYER_NAMES.length;  // 8 → indices 0..7, plus 8 = Start-Button
+  const START_BTN = total;
+  if (inp.leftEdge)  nameSelectCursor = (nameSelectCursor - 1 + total + 1) % (total + 1);
+  if (inp.rightEdge) nameSelectCursor = (nameSelectCursor + 1) % (total + 1);
+  if (inp.upEdge) {
+    if (nameSelectCursor === START_BTN)     nameSelectCursor = cols + 1;  // Start → 2. Reihe Mitte (Index 5)
+    else if (nameSelectCursor >= cols)      nameSelectCursor -= cols;     // 2. → 1. Reihe gleiche Spalte
+  }
+  if (inp.downEdge) {
+    if (nameSelectCursor < cols)            nameSelectCursor += cols;     // 1. → 2. Reihe gleiche Spalte
+    else if (nameSelectCursor < total)      nameSelectCursor = START_BTN; // 2. Reihe → Start-Button
+  }
+
+  // Maus-Klick
+  if (lastClick) {
+    for (const r of clickRegions) {
+      if (consumeClickIn(r)) {
+        if (r.action === 'name') {
+          nameSelectCursor = r.payload;
+          currentPlayer = PLAYER_NAMES[r.payload];
+          beginGame();
+        } else if (r.action === 'start') {
+          if (nameSelectCursor < PLAYER_NAMES.length) currentPlayer = PLAYER_NAMES[nameSelectCursor];
+          beginGame();
+        }
+        return;
+      }
+    }
+    lastClick = null;  // Klick ins Leere → verwerfen
+  }
+
+  // Enter / Space bestätigt
+  if (inp.enterEdge || inp.spaceEdge) {
+    if (nameSelectCursor < PLAYER_NAMES.length) currentPlayer = PLAYER_NAMES[nameSelectCursor];
+    beginGame();
+  }
+}
+
+function beginGame() {
+  ensureAudio(); startMusic(); initGame();
+  gameOverRecorded = false;
+  justRecordedIndex = -1;
+  state = 'playing';
+}
+
+// ── Hall of Fame Screen ──────────────────────────────────────
+function drawHallOfFame() {
+  // Hintergrund (Titel-Video gedimmt)
+  if (bgVideo.readyState >= 2) {
+    ctx.drawImage(bgVideo, 0, 0, W, H);
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  }
+
+  // Titel
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 80px serif';
+  ctx.shadowColor = '#FF8800'; ctx.shadowBlur = 28;
+  ctx.fillText('★  HALL OF FAME  ★', W/2, 130);
+  ctx.shadowBlur = 0;
+
+  // Letzte Partie anzeigen
+  if (justRecordedIndex >= 0) {
+    ctx.fillStyle = '#FFFFFF'; ctx.font = '32px serif';
+    ctx.fillText(`Letzte Partie: ${currentPlayer}  —  Score ${score}  —  Level ${level}`, W/2, 180);
+  }
+
+  // Tabelle: Top 10
+  const hof = loadHOF().slice(0, 10);
+  const tableTop = 230;
+  const rowH = 52;
+  const colRank  = W/2 - 480;
+  const colName  = W/2 - 380;
+  const colScore = W/2 + 120;
+  const colLevel = W/2 + 360;
+
+  // Kopfzeile
+  ctx.font = 'bold 28px monospace';
+  ctx.fillStyle = '#AAAAAA';
+  ctx.textAlign = 'left';
+  ctx.fillText('#',       colRank,  tableTop);
+  ctx.fillText('SPIELER', colName,  tableTop);
+  ctx.textAlign = 'right';
+  ctx.fillText('SCORE',   colScore, tableTop);
+  ctx.fillText('LEVEL',   colLevel, tableTop);
+
+  // Trennlinie
+  ctx.strokeStyle = '#C87000'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(colRank - 10, tableTop + 14);
+  ctx.lineTo(colLevel + 20, tableTop + 14);
+  ctx.stroke();
+
+  // Einträge
+  ctx.font = 'bold 34px serif';
+  for (let i = 0; i < hof.length; i++) {
+    const e = hof[i];
+    const y = tableTop + 50 + i * rowH;
+    const isLatest = (i === justRecordedIndex);
+    // Hervorhebung für frisch gespeicherten Score
+    if (isLatest) {
+      const pulse = 0.4 + 0.4 * Math.sin(frame * 0.14);
+      ctx.fillStyle = `rgba(255, 215, 0, ${pulse * 0.3})`;
+      ctx.fillRect(colRank - 20, y - 36, colLevel - colRank + 50, rowH - 4);
+    }
+    const color = isLatest ? '#FFD700' : (i === 0 ? '#FFEEAA' : '#DDDDDD');
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.fillText((i + 1) + '.', colRank, y);
+    ctx.fillText(e.name,        colName, y);
+    ctx.textAlign = 'right';
+    ctx.fillText(e.score.toLocaleString('de-DE'), colScore, y);
+    ctx.fillText('L ' + e.level, colLevel, y);
+  }
+  if (hof.length === 0) {
+    ctx.fillStyle = '#888888'; ctx.font = '28px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('(noch keine Einträge)', W/2, tableTop + 80);
+  }
+
+  // "Neues Spiel" Button
+  const btnW = 380, btnH = 90;
+  const btnX = (W - btnW) / 2, btnY = H - 130;
+  clickRegions = [];
+  drawButton(btnX, btnY, btnW, btnH, '▶  NEUES SPIEL', true, 40);
+  clickRegions.push({ x: btnX, y: btnY, w: btnW, h: btnH, action: 'newgame' });
+
+  ctx.textAlign = 'left';
+}
+
+function updateHallOfFame() {
+  if (lastClick) {
+    for (const r of clickRegions) {
+      if (consumeClickIn(r) && r.action === 'newgame') { goToNameSelect(); return; }
+    }
+    lastClick = null;
+  }
+  if (inp.enterEdge || inp.spaceEdge || inp.flapEdge) goToNameSelect();
+}
+
+function goToNameSelect() {
+  // Titel-Musik läuft schon (in halloffame gestartet)
+  state = 'nameSelect';
+  justRecordedIndex = -1;
+}
+
 function drawTitle() {
   // Darkened video background
   if (bgVideo.readyState >= 2) {
@@ -1617,12 +1911,25 @@ function loop() {
     if (!titleMusicStarted) {
       titleMusic.play().then(()=>{ titleMusicStarted=true; }).catch(()=>{});
     }
-    if (inp.anyEdge) {
-      titleMusicStarted=true;
-      ensureAudio(); startMusic(); initGame(); state='playing';
+    if (inp.anyEdge || lastClick) {
+      titleMusicStarted = true;
+      lastClick = null;
+      state = 'nameSelect';
     }
 
+  } else if (state==='nameSelect') {
+    if (!titleMusicStarted) titleMusic.play().then(()=>{ titleMusicStarted=true; }).catch(()=>{});
+    drawNameSelect();
+    updateNameSelect();
+
+  } else if (state==='halloffame') {
+    // Titelmusik läuft wieder
+    if (titleMusic.paused) { titleMusic.volume = 0.22; titleMusic.currentTime = 0; titleMusic.play().catch(()=>{}); }
+    drawHallOfFame();
+    updateHallOfFame();
+
   } else if (state==='prolevel') {
+    lastClick = null;  // Klicks während des Spiels nicht in andere States lecken
     // Leertaste = Pause (flapEdge verbrauchen damit Spieler nicht gleichzeitig flappt)
     if (inp.spaceEdge) {
       paused = !paused;
@@ -1666,6 +1973,7 @@ function loop() {
     if (inp.skipEdge) { SND_CYCLOP_IDLE.pause(); initGame(); state='playing'; }
 
   } else if (state==='playing') {
+    lastClick = null;  // Klicks während des Spiels nicht in andere States lecken
     // Space key only = pause toggle; consume flapEdge so player doesn't also flap
     if (inp.spaceEdge) { paused = !paused; inp.flapEdge = false; prev.flap = true; }
 
@@ -1707,11 +2015,17 @@ function loop() {
   } else if (state==='gameover') {
     gameoverWait++;
     if (gameoverWait===1) stopMusic();
+    if (!gameOverRecorded) {
+      gameOverRecorded = true;
+      recordScore(currentPlayer, score, level);
+    }
     drawBg(); drawAllPlats(); drawLava();
     drawOverlay('GAME OVER','#FF2222','FINAL SCORE: '+score,
-                gameoverWait>80 ? 'Taste / Knopf = Nochmal' : '...');
-    if (gameoverWait>80 && inp.anyEdge) {
-      ensureAudio(); startMusic(); initGame(); state='playing';
+                gameoverWait>80 ? 'Taste / Klick = Hall of Fame' : '...');
+    // Auto-Sprung nach 4s ODER auf Klick/Taste
+    if ((gameoverWait > 80 && (inp.anyEdge || lastClick)) || gameoverWait > 240) {
+      lastClick = null;
+      state = 'halloffame';
     }
   }
 
