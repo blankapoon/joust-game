@@ -67,6 +67,15 @@ bgVideo.preload = 'auto';
 bgVideo.play().catch(() => {});
 // video starts when user first interacts (inside startMusic)
 
+// ── Cyclops level background (ab Cyclopen-Level Level 4+) ────
+const bgVideoCyclops = document.createElement('video');
+bgVideoCyclops.src = 'Cyclopen_background_02.mp4';
+bgVideoCyclops.loop = true;
+bgVideoCyclops.muted = true;
+bgVideoCyclops.playsInline = true;
+bgVideoCyclops.preload = 'auto';
+bgVideoCyclops.play().catch(() => {});
+
 // ── Cyclops sprite video (VP9 WebM with alpha channel) ───────
 const cyclopVid = document.createElement('video');
 cyclopVid.src = 'Cyclop_idle_loop.webm';  // VP9 alpha – bereits transparent
@@ -235,7 +244,19 @@ const GROUND = [
   {x:1380, y:920, w:540,  h:160},  // right ground
   {x: 700, y:876, w:520,  h: 44},  // lava bridge (center)
 ];
+// Cyclopen-Level: durchgehender Boden, keine Lava
+const GROUND_CYCLOPS = [
+  {x: 0, y:920, w:W, h:160},
+];
 const LAVA_X = 540, LAVA_W = 840;
+
+// Ab welchem Level kommt der Cyclop (1-basiert) → eigener BG, kein Lava, kein Troll
+const CYCLOPS_LEVEL_START = 4;
+function isCyclopsLevel(lvl) { return lvl >= CYCLOPS_LEVEL_START; }
+function currentGround() { return isCyclopsLevel(level) ? GROUND_CYCLOPS : GROUND; }
+
+// TEMP: zum Testen direkt im Cyclopen-Level starten. Auf 1 zurücksetzen für normales Spiel.
+const START_LEVEL = 4;
 
 // ── Prolevel constants ────────────────────────────────────────
 const PROLEVEL_PLAT    = [{x:0, y:920, w:W, h:160}];   // lückenloser Boden
@@ -559,7 +580,7 @@ function getLanceTip(p) {
 
 function setLevelPlatforms() {
   const islands = LEVEL_ISLANDS[Math.min(level-1, LEVEL_ISLANDS.length-1)] || [];
-  PLAT = [...GROUND, ...islands];
+  PLAT = [...currentGround(), ...islands];
 }
 
 // ── Vase spawn system ─────────────────────────────────────────
@@ -904,7 +925,7 @@ let roundWave = 0;  // how many waves have been completed this round
 const LEVEL_WAVES = [3, 3, 3, 2, 2, 2, 2];
 
 function initGame() {
-  score=0; lives=3; eggs=[]; particles=[]; vaseSpawns=[]; proRocks=[]; level=1; levelTransition=0; paused=false;
+  score=0; lives=3; eggs=[]; particles=[]; vaseSpawns=[]; proRocks=[]; level=START_LEVEL; levelTransition=0; paused=false;
   roundRestarting=false; roundWave=0; roundKills=[0,0,0]; roundVasesCollected=0; roundEnemyTypes=new Set(); summaryData=null; totalVasesCollected=0;
   setLevelPlatforms(); spawnEnemies(); spawnPlayer();
 }
@@ -1264,8 +1285,9 @@ function drawSummary() {
 
 // ── Drawing ──────────────────────────────────────────────────
 function drawBg() {
-  if (bgVideo.readyState >= 2) {
-    ctx.drawImage(bgVideo, 0, 0, W, H);
+  const v = isCyclopsLevel(level) ? bgVideoCyclops : bgVideo;
+  if (v.readyState >= 2) {
+    ctx.drawImage(v, 0, 0, W, H);
   } else {
     const bg = RAW.bg;
     if (bg.complete && bg.naturalWidth > 0) {
@@ -1304,14 +1326,19 @@ function drawPlatform(p, isMain) {
 }
 
 function drawAllPlats() {
-  drawPlatform(GROUND[0], true);
-  drawPlatform(GROUND[1], true);
-  drawPlatform(GROUND[2], false);
+  if (isCyclopsLevel(level)) {
+    drawPlatform(GROUND_CYCLOPS[0], true);
+  } else {
+    drawPlatform(GROUND[0], true);
+    drawPlatform(GROUND[1], true);
+    drawPlatform(GROUND[2], false);
+  }
   const islands = LEVEL_ISLANDS[Math.min(level-1, LEVEL_ISLANDS.length-1)] || [];
   for (const isl of islands) drawPlatform(isl, false);
 }
 
 function drawLava() {
+  if (isCyclopsLevel(level)) return;  // Cyclopen-Level: kein Lava
   const ly=920, t=frame*0.04;
   for (let x=LAVA_X; x<LAVA_X+LAVA_W; x+=8) {
     const wave=Math.sin(x*0.025+t)*7;
@@ -1338,7 +1365,7 @@ function drawLava() {
 }
 
 function checkTrollHand() {
-  if (level <= 1) return;  // no troll in warm-up level
+  if (level <= 1 || isCyclopsLevel(level)) return;  // no troll in warm-up oder Cyclopen-Level
   const ph = Math.sin(frame * 0.012);
   if (ph <= 0.55) return;
   const rise = (ph - 0.55) / 0.45;
