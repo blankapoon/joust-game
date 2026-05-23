@@ -756,6 +756,20 @@ const LEVEL_COUNTS = [
   [2,2,2,3,3],    // level 6: Banditen + 2 Cyclopen (Peak)
 ];
 
+// Spielbare Level-Namen für Übergangs-Overlay
+const LEVEL_NAMES = [
+  'Das Erwachen',         // L1
+  'Die Brennende Hand',   // L2
+  'Banditen-Sturm',       // L3
+  'Der Einäugige',        // L4
+  'Die Höhle des Cyclops',// L5
+  'Die Zwei Türme',       // L6
+];
+function getLevelName(lvl) {
+  if (lvl <= LEVEL_NAMES.length) return LEVEL_NAMES[lvl - 1];
+  return 'Endlose Schlacht · Welle ' + (lvl - LEVEL_NAMES.length);
+}
+
 function getEnemyConfig(lvl) {
   if (lvl <= LEVEL_COUNTS.length) return LEVEL_COUNTS[lvl - 1];
   // Level 7+: Endless – 2 Cyclopen, Banditen-Anzahl steigt pro Level
@@ -1263,10 +1277,10 @@ function drawSummary() {
 
   // Title
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 58px serif';
-  ctx.fillText('⚔  RUNDE ' + level + ' ABGESCHLOSSEN  ⚔', W / 2, PY + 72);
-  ctx.fillStyle = '#AAAAAA'; ctx.font = '26px serif';
-  ctx.fillText('Besiegte Gegner', W / 2, PY + 110);
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 54px serif';
+  ctx.fillText('⚔  ' + getLevelName(level).toUpperCase() + '  ⚔', W / 2, PY + 68);
+  ctx.fillStyle = '#AAAAAA'; ctx.font = '24px serif';
+  ctx.fillText('Level ' + level + ' · Besiegte Gegner', W / 2, PY + 108);
 
   // ── Dynamic rows – enemy types + optional vase row ──────────
   const numRows   = sd.activeTypes.length;
@@ -1311,9 +1325,22 @@ function drawSummary() {
     // Sprite icon (face right toward text, sprites are left-facing by default)
     ctx.save();
     ctx.translate(ICON_CX, rowMid + sH * 0.5);
-    ctx.scale(-1, 1);
-    if (img) ctx.drawImage(img, -sW / 2, -sH, sW, sH);
-    else { ctx.fillStyle = t.color; ctx.fillRect(-sW / 2, -sH / 2, sW, sH / 2); }
+    if (ti === 3) {
+      // Cyclop: live-Frame aus cyclopVid (kein Sprite-PNG), Charakter-Region cropen
+      // Charakter in 1280×720: x≈320..870 (w=550), y≈40..690 (h=650), Ratio ≈ 0.846
+      if (cyclopVid.readyState >= 2) {
+        const charAR = 550 / 650;
+        const iconH  = sH * 1.45;          // höher als andere Icons, weil Cyclop hochformatig
+        const iconW  = iconH * charAR;
+        ctx.drawImage(cyclopVid, 320, 40, 550, 650, -iconW/2, -iconH, iconW, iconH);
+      } else {
+        ctx.fillStyle = t.color; ctx.fillRect(-sW/2, -sH, sW, sH);
+      }
+    } else {
+      ctx.scale(-1, 1);
+      if (img) ctx.drawImage(img, -sW / 2, -sH, sW, sH);
+      else { ctx.fillStyle = t.color; ctx.fillRect(-sW / 2, -sH / 2, sW, sH / 2); }
+    }
     ctx.restore();
 
     // Name
@@ -1579,11 +1606,17 @@ function drawParticles() {
 }
 
 function drawHUD() {
-  // Score
-  ctx.font='bold 36px serif'; ctx.textAlign='left';
+  // Score — Box wächst dynamisch mit der Textbreite, damit nichts überläuft
+  ctx.textAlign='left';
+  ctx.font='bold 32px serif';
+  const scoreText = 'SCORE: '+score+'   LEVEL: '+level;
+  const scoreTextW = ctx.measureText(scoreText).width;
+  const scoreBoxW = Math.max(340, Math.ceil(scoreTextW) + 28);
   ctx.fillStyle='rgba(0,0,0,0.5)';
-  ctx.fillRect(20,14,340,52);
-  ctx.fillStyle='#FFD700'; ctx.fillText('SCORE: '+score+'   LEVEL: '+level, 30, 52);
+  ctx.fillRect(20, 14, scoreBoxW, 52);
+  ctx.fillStyle='#FFD700';
+  ctx.fillText(scoreText, 30, 50);
+  ctx.font='bold 36px serif';
 
   // Spieler-Name mittig oben
   ctx.textAlign='center';
@@ -1739,14 +1772,13 @@ function updateNameSelect() {
     else if (nameSelectCursor < total)      nameSelectCursor = START_BTN; // 2. Reihe → Start-Button
   }
 
-  // Maus-Klick
+  // Maus-Klick: Namen wählt nur aus, erst Start-Button startet das Spiel
   if (lastClick) {
     for (const r of clickRegions) {
       if (consumeClickIn(r)) {
         if (r.action === 'name') {
           nameSelectCursor = r.payload;
           currentPlayer = PLAYER_NAMES[r.payload];
-          beginGame();
         } else if (r.action === 'start') {
           if (nameSelectCursor < PLAYER_NAMES.length) currentPlayer = PLAYER_NAMES[nameSelectCursor];
           beginGame();
@@ -1757,10 +1789,14 @@ function updateNameSelect() {
     lastClick = null;  // Klick ins Leere → verwerfen
   }
 
-  // Enter / Space bestätigt
+  // Cursor auf Namen = currentPlayer setzen (Auswahl-Vorschau)
+  if (nameSelectCursor < PLAYER_NAMES.length) {
+    currentPlayer = PLAYER_NAMES[nameSelectCursor];
+  }
+  // Enter/Space: auf Namen → Cursor zum Start-Button springen; auf Start-Button → losspielen
   if (inp.enterEdge || inp.spaceEdge) {
-    if (nameSelectCursor < PLAYER_NAMES.length) currentPlayer = PLAYER_NAMES[nameSelectCursor];
-    beginGame();
+    if (nameSelectCursor === PLAYER_NAMES.length) beginGame();
+    else nameSelectCursor = PLAYER_NAMES.length;
   }
 }
 
@@ -1990,12 +2026,12 @@ function loop() {
       ctx.fillStyle = `rgba(0,0,0,${a * 0.65})`;
       ctx.fillRect(0, 0, W, H);
       ctx.textAlign = 'center';
-      ctx.font = 'bold 120px serif';
+      ctx.font = 'bold 80px serif';
       ctx.fillStyle = `rgba(255,215,0,${a})`;
-      ctx.fillText('LEVEL ' + level, W/2, H/2);
-      ctx.font = 'bold 42px serif';
+      ctx.fillText('LEVEL ' + level, W/2, H/2 - 30);
+      ctx.font = 'bold 64px serif';
       ctx.fillStyle = `rgba(255,255,255,${a})`;
-      ctx.fillText(level <= 2 ? 'Viel Erfolg!' : 'Neue Plattform erscheint!', W/2, H/2 + 80);
+      ctx.fillText(getLevelName(level), W/2, H/2 + 60);
       ctx.textAlign = 'left';
     }
     // Pause overlay
