@@ -287,7 +287,7 @@ const WEBM_DRAW_H = Math.round(720  * WEBM_SCALE);          // ≈ 463 px
 const WEBM_OFF_X  = Math.round(WEBM_VASE_CX     * WEBM_SCALE); // ≈ 412 = WEBM_DRAW_W/2 → perfect center
 const WEBM_OFF_Y  = Math.round(WEBM_VASE_BOTTOM * WEBM_SCALE); // ≈ 425
 const WEBM_RAISE  = 0;
-const WEBM_DISPLAY_SCALE = 0.5;   // Vase-Spawn-Animation Größe
+const WEBM_DISPLAY_SCALE = 0.78;   // Vase-Spawn-Animation Größe
 let dragon = null;  // null = not flying
 let dragonCooldown = 1500;  // first dragon after ~25s (not in level 1)
 
@@ -578,16 +578,17 @@ function updateVaseSpawns() {
   for (let i = vaseSpawns.length - 1; i >= 0; i--) {
     const v = vaseSpawns[i];
 
-    // ── Player can collect a waiting vase ──────────────────────
-    if (v.phase === 'wait' && player && player.invincible === 0) {
+    // ── Player can collect a waiting OR spawning vase ──────────
+    if ((v.phase === 'wait' || v.phase === 'anim') && player && player.invincible === 0) {
       const vRect = { x: v.spawnX + ENT_W/2 - VASE_W/2, y: v.spawnY + ENT_H - VASE_H, w: VASE_W, h: VASE_H };
       if (overlaps(player, vRect)) {
         score += 200;
         if (v.fromSit) roundVasesCollected++;
         totalVasesCollected++;
-        if (totalVasesCollected % 3 === 0) { lives++; playBonusLife(); boom(player.x+player.w/2, player.y, 20, ['#FFD700','#FFFFFF','#FF88FF','#00FFFF']); }
+        if (totalVasesCollected % 7 === 0) { lives++; playBonusLife(); boom(player.x+player.w/2, player.y, 20, ['#FFD700','#FFFFFF','#FF88FF','#00FFFF']); }
         sfxEgg();
         boom(v.spawnX + ENT_W/2, v.spawnY + ENT_H - VASE_H/2, 10, ['#FFD700','#FFAA00','#FF8800']);
+        if (v.video) { v.video.pause(); v.video = null; }
         vaseSpawns.splice(i, 1);
         continue;
       }
@@ -714,7 +715,7 @@ function updateEnemies() {
     const nearGround  = e.onGround && !e.wantsToSit;
     const wantsHigher = !e.wantsToSit && player && e.y > player.y + 80;
     const nextFlap    = e.nextFlapAt ?? 0;
-    if (!e.isIdle && !e.wantsToSit && (e.flapTimer >= nextFlap || (nearGround && e.flapTimer > 8))) {
+    if (!e.isIdle && e.ti !== 3 && !e.wantsToSit && (e.flapTimer >= nextFlap || (nearGround && e.flapTimer > 8))) {
       // new random interval for the NEXT flap
       e.nextFlapAt = et.fiMin + Math.floor(Math.random() * (et.fiMax - et.fiMin));
       e.flapTimer  = 0;
@@ -789,10 +790,11 @@ function updateEnemies() {
 
     if (player && player.invincible===0 && overlaps(player,e)) {
       if (e.ti === 3) {
-        // ── Cyclops: only lance tip hitting head kills it ──────
-        const tip  = getLanceTip(player);
-        const head = { x: e.x + e.w*0.15, y: e.y + (e.headYOff ?? 0), w: e.w*0.70, h: e.headH ?? CYCLOP_HEAD_H };
-        if (overlaps(tip, head)) {
+        // ── Cyclops: Lanze in obere Hälfte (inkl. Sprite-Überstand) tötet ──
+        const tip = getLanceTip(player);
+        const yOff = e.headYOff ?? 0;                 // negativ = Sprite ragt über Hitbox oben hinaus
+        const upper = { x: e.x, y: e.y + yOff, w: e.w, h: (e.h / 2) - yOff };
+        if (overlaps(tip, upper)) {
           score += 500;
           boomFeathers(e.x+e.w/2, e.y+e.h/2, 0);
           roundKills[3]++;
@@ -831,7 +833,7 @@ function updateEggs() {
       score+=200;
       if (eg.fromSit) roundVasesCollected++;
       totalVasesCollected++;
-      if (totalVasesCollected % 3 === 0) { lives++; playBonusLife(); boom(player.x+player.w/2, player.y, 20, ['#FFD700','#FFFFFF','#FF88FF','#00FFFF']); }
+      if (totalVasesCollected % 7 === 0) { lives++; playBonusLife(); boom(player.x+player.w/2, player.y, 20, ['#FFD700','#FFFFFF','#FF88FF','#00FFFF']); }
       boom(eg.x+eg.w/2,eg.y+eg.h/2,12,['#FFFF00','#FFCC00']);
       sfxEgg(); eggs.splice(i,1); continue;
     }
@@ -977,13 +979,25 @@ function spawnProRock(e) {
 
 const PROLEVEL_FLOOR_Y = 920;  // Oberkante des Prolevel-Bodens
 
+const ROCK_REST_FRAMES = 150;   // 2.5s bei 60fps bevor der Fels ausfadet
+const ROCK_FADE_FRAMES  = 60;   // 1s Fadeout
 function updateProRocks() {
   for (let i = proRocks.length - 1; i >= 0; i--) {
     const r = proRocks[i];
     if (r.onGround) {
-      // Auf Boden: rutschen mit wenig Reibung, nur off-screen entfernen
+      // Auf Boden: rutschen mit wenig Reibung
       r.vx *= 0.97;
       r.x  += r.vx;
+      // Ruhe-Timer: wenn fast still, hochzählen → erst rest, dann fade
+      if (Math.abs(r.vx) < 0.4) {
+        r.restTimer = (r.restTimer ?? 0) + 1;
+        if (r.restTimer > ROCK_REST_FRAMES) {
+          r.alpha = Math.max(0, 1 - (r.restTimer - ROCK_REST_FRAMES) / ROCK_FADE_FRAMES);
+          if (r.alpha <= 0) { proRocks.splice(i, 1); continue; }
+        }
+      } else {
+        r.restTimer = 0;
+      }
     } else {
       r.vy += 0.15;
       r.x  += r.vx;
@@ -995,8 +1009,8 @@ function updateProRocks() {
         r.onGround = true;
       }
     }
-    // Treffer auf Spieler
-    if (player && player.invincible === 0) {
+    // Treffer auf Spieler (nur solange nicht ausgeblendet)
+    if (player && player.invincible === 0 && (r.alpha ?? 1) > 0.4) {
       const rRect = { x: r.x - 55, y: r.y - 45, w: 110, h: 90 };
       if (overlaps(player, rRect)) {
         proRocks.splice(i, 1);
@@ -1019,7 +1033,10 @@ const ROCK_CY_OFF = Math.round(415  * (80 / 230));  // 144  (Steinmitte y → dr
 function drawProRocks() {
   if (rockVid.readyState < 2) return;
   for (const r of proRocks) {
+    const a = r.alpha ?? 1;
+    if (a < 1) ctx.globalAlpha = a;
     ctx.drawImage(rockVid, r.x - ROCK_CX_OFF, r.y - ROCK_CY_OFF, ROCK_DRAW_W, ROCK_DRAW_H);
+    if (a < 1) ctx.globalAlpha = 1;
   }
 }
 
@@ -1441,15 +1458,23 @@ function drawHUD() {
   ctx.fillRect(20,14,340,52);
   ctx.fillStyle='#FFD700'; ctx.fillText('SCORE: '+score+'   LEVEL: '+level, 30, 52);
 
-  // Lives
+  // Lives — Icons skalieren dynamisch, damit auch viele Leben reinpassen
   ctx.textAlign='right';
   ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(W-360,14,340,52);
   ctx.fillStyle='#FFFFFF'; ctx.fillText('LEBEN:', W-200, 52);
+  const LIFE_AVAIL_W = 175;   // verfügbare Breite rechts von "LEBEN:"
+  const LIFE_MAX_PITCH = 58;
+  const lifePitch = lives > 0 ? Math.min(LIFE_MAX_PITCH, LIFE_AVAIL_W / lives) : LIFE_MAX_PITCH;
+  const lifeScale = lifePitch / LIFE_MAX_PITCH;
+  const lifeIconW = Math.round(52 * lifeScale);
+  const lifeIconH = Math.round(64 * lifeScale);
+  const lifeIconY = 14 + (52 - lifeIconH) / 2;
   for (let i=0; i<lives; i++) {
     const img = getImg('blueBase');
-    if (img) ctx.drawImage(img, W-185+i*58, 8, 52, 64);
+    const x = W - 185 + i * lifePitch;
+    if (img) ctx.drawImage(img, x, lifeIconY, lifeIconW, lifeIconH);
     else {
-      ctx.fillStyle='#4466FF'; ctx.fillRect(W-185+i*58, 14, 46, 44);
+      ctx.fillStyle='#4466FF'; ctx.fillRect(x, lifeIconY + 4, lifeIconW - 6, lifeIconH - 16);
     }
   }
   ctx.textAlign='left';
