@@ -764,16 +764,21 @@ function drawVaseSpawns() {
     const bottom = v.spawnY + ENT_H;  // = platform top surface
     if (v.phase === 'wait') {
       const img = getImg('vase');
-      if (img) ctx.drawImage(img, cx - VASE_W / 2, bottom - VASE_H, VASE_W, VASE_H);
-      // Yellow multiply flash for first ~60 frames
-      if (v.flashTimer > 0 && Math.floor(v.flashTimer / 6) % 2 === 0) {
+      // Weicher Gold-Glow hinter frisch erschienener Vase (pulsiert + fadet aus)
+      if (v.flashTimer > 0) {
+        const t = v.flashTimer / 60;                              // 1 → 0
+        const pulse = 0.55 + 0.45 * Math.sin(v.flashTimer * 0.4);
+        const gy  = bottom - VASE_H * 0.5;
+        const rad = VASE_W * 1.15;
+        const grad = ctx.createRadialGradient(cx, gy, 0, cx, gy, rad);
+        grad.addColorStop(0, `rgba(255,224,0,${0.55 * t * pulse})`);
+        grad.addColorStop(1, 'rgba(255,224,0,0)');
         ctx.save();
-        ctx.globalCompositeOperation = 'multiply';
-        ctx.globalAlpha = 0.80;
-        ctx.fillStyle = '#FFE000';
-        ctx.fillRect(cx - VASE_W / 2, bottom - VASE_H, VASE_W, VASE_H);
+        ctx.fillStyle = grad;
+        ctx.fillRect(cx - rad, gy - rad, rad * 2, rad * 2);
         ctx.restore();
       }
+      if (img) ctx.drawImage(img, cx - VASE_W / 2, bottom - VASE_H, VASE_W, VASE_H);
     } else if (v.phase === 'anim' && v.video && v.video.readyState >= 2) {
       // Draw scaled WebM so the vase in the film lands at (cx, bottom).
       // WEBM_SCALE = VASE_W / vase-pixels-in-frame → correct proportion, no squash.
