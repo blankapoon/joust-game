@@ -937,7 +937,7 @@ function updateEnemies() {
         const upper = { x: e.x, y: e.y + yOff, w: e.w, h: (e.h / 2) - yOff };
         if (overlaps(tip, upper)) {
           score += 500;
-          boomFeathers(e.x+e.w/2, e.y+e.h/2, 0);
+          boomFeathers(e.x+e.w/2, e.y+e.h/2, 3);  // 3 → Münzen
           roundKills[3]++;
           const eg = mkEnt(e.x+CYCLOP_W*0.3, e.y+CYCLOP_H*0.3, 44, 56);
           eg.ti=3; eg.timer=0; eg.maxTimer=290; eg.fromSit=false;
@@ -1018,15 +1018,15 @@ function boomFeathers(x, y, enemyTi) {
   // Cyclop-Tod gibt Münzen, sonst Federn (weiss bei Rittern, braun bei Banditen)
   if (enemyTi === 3) { boomCoins(x, y, 16); return; }
   const key = ETYPES[enemyTi]?.feather ?? 'featherKnight';
-  for (let i=0; i<18; i++) {
+  for (let i=0; i<22; i++) {
     const a=Math.random()*Math.PI*2, s=3+Math.random()*9;
-    const l=45+Math.random()*40;
+    const l=80+Math.random()*50;
     particles.push({
       x, y,
       vx: Math.cos(a)*s, vy: Math.sin(a)*s - 5,
       life:l, maxLife:l,
       imgKey: key,
-      scale: 0.25 + Math.random()*0.65,
+      scale: 0.55 + Math.random()*0.85,
       rot:   Math.random()*Math.PI*2,
       rotSpd:(Math.random()-0.5)*0.25,
     });
@@ -1966,11 +1966,14 @@ function drawTitle() {
   } else {
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
   }
-  // Cover image on top, slightly transparent so video shines through
+  // Cover image: zentriert, 2/3 Größe, leicht transparent so video shines through
   const cover = getImg('cover');
   if (cover) {
+    const cs = 2 / 3;
+    const cw = W * cs, ch = H * cs;
+    const cx = (W - cw) / 2, cy = (H - ch) / 2;
     ctx.globalAlpha = 0.88;
-    ctx.drawImage(cover, 0, 0, W, H);
+    ctx.drawImage(cover, cx, cy, cw, ch);
     ctx.globalAlpha = 1;
   }
   // Pulsing "press to start" text at bottom
