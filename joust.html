@@ -251,7 +251,7 @@ const GROUND_CYCLOPS = [
 const LAVA_X = 540, LAVA_W = 840;
 
 // Ab welchem Level kommt der Cyclop (1-basiert) → eigener BG, kein Lava, kein Troll
-const CYCLOPS_LEVEL_START = 4;
+const CYCLOPS_LEVEL_START = 5;
 function isCyclopsLevel(lvl) { return lvl >= CYCLOPS_LEVEL_START; }
 function currentGround() { return isCyclopsLevel(level) ? GROUND_CYCLOPS : GROUND; }
 
@@ -270,13 +270,14 @@ const CYCLOP_PL_W      = Math.round(CYCLOP_W * CYCLOP_PL_SCALE / 0.4);   // 127
 const CYCLOP_PL_H      = Math.round(CYCLOP_H * CYCLOP_PL_SCALE / 0.4);   // 233
 // Floating islands per level (index 0 = level 1, etc.) — now 6 levels
 const LEVEL_ISLANDS = [
-  [],  // level 1: warm-up, keine Inseln, keine Troll-Hand
-  [],  // level 2: gleiche Plattformen, Troll-Hand aktiv
-  [ {x:760,  y:590, w:400, h:30} ],  // level 3: Mitte hoch
-  [],  // level 4: erstes Cyclopen-Level, keine Inseln
-  [ {x:760,  y:490, w:400, h:30} ],  // level 5: eine Mittel-Insel
-  [ {x:200,  y:330, w:320, h:30}, {x:1400, y:330, w:320, h:30} ],  // level 6: zwei sehr hohe Inseln
-  [ {x:700,  y:380, w:520, h:30}, {x:150,  y:540, w:300, h:30}, {x:1470, y:540, w:300, h:30},   // level 7: Endlevel
+  [],  // L1 Das Erwachen: warm-up, keine Inseln, keine Troll-Hand
+  [],  // L2 Die Brennende Hand: gleiche Plattformen, Troll-Hand aktiv
+  [ {x:760,  y:590, w:400, h:30} ],                                  // L3 Der Drache erwacht: Mitte hoch
+  [ {x:300,  y:560, w:280, h:30}, {x:1340, y:560, w:280, h:30} ],    // L4 Die Banditen: zwei Seiten-Inseln
+  [],                                                                // L5 Der Einäugige: erstes Cyclopen-Level
+  [ {x:760,  y:490, w:400, h:30} ],                                  // L6 Die Höhle des Cyclops
+  [ {x:200,  y:330, w:320, h:30}, {x:1400, y:330, w:320, h:30} ],    // L7 Die Zwei Türme
+  [ {x:700,  y:380, w:520, h:30}, {x:150,  y:540, w:300, h:30}, {x:1470, y:540, w:300, h:30},   // L8 Endlevel
     {x:480,  y:680, w:240, h:30}, {x:1200, y:680, w:240, h:30}, {x:860, y:560, w:200, h:30} ],
 ];
 let PLAT = [...GROUND];
@@ -441,6 +442,7 @@ let gameoverWait = 0;
 
 // ── Input ────────────────────────────────────────────────────
 const keys = {};
+let gpDebug = [];  // pro Frame neu befüllt von readInput()
 const inp  = {left:false, right:false, flapEdge:false, anyEdge:false, spaceEdge:false, skipEdge:false,
               leftEdge:false, rightEdge:false, upEdge:false, downEdge:false, enterEdge:false};
 const prev = {flap:false, any:false, space:false, skip:false,
@@ -462,27 +464,42 @@ function readInput() {
   let flapK = !!(keys[' '] || keys['ArrowUp'] || keys['w'] || keys['W']);
   let anyK  = flapK || inp.left || inp.right || !!keys['Enter'];
 
-  // Skip fake gamepads (headsets, unknown BT devices). Mehrere Pads parallel auswerten
-  // (kein break) – sonst geht der zweite angeschlossene Controller nicht.
+  // Skip fake gamepads (headsets melden sich oft als Gamepad)
   const SKIP_IDS = ['poly', 'bt700', 'headset', 'audio', 'headphone'];
   const gpList = navigator.getGamepads ? navigator.getGamepads() : [];
+  gpDebug = [];
   for (let gi = 0; gi < gpList.length; gi++) {
     const gp = gpList[gi];
     if (!gp) continue;
     const id = gp.id.toLowerCase();
-    if (SKIP_IDS.some(s => id.includes(s))) continue;  // skip non-gamepads
+    const skipped = SKIP_IDS.some(s => id.includes(s));
+    // Debug-Eintrag bauen (auch für skipped Pads, damit User sieht warum)
+    let pressedBtn = -1;
+    for (let bi = 0; bi < gp.buttons.length; bi++) {
+      if (gp.buttons[bi]?.pressed || gp.buttons[bi]?.value > 0.5) { pressedBtn = bi; break; }
+    }
+    gpDebug.push({
+      idx: gi,
+      name: gp.id.slice(0, 38),
+      ax0: (gp.axes[0] ?? 0).toFixed(2),
+      ax1: (gp.axes[1] ?? 0).toFixed(2),
+      btn: pressedBtn,
+      skipped,
+    });
+    if (skipped) continue;
 
-    const DZ = 0.30;
-    // Only axis 0 = horizontal (left/right). Iterating all axes causes drift
-    // because trigger/secondary axes rest at +1.0 on many gamepads.
+    const DZ = 0.25;
+    // Stick (axes[0]) und manchmal axes[2] (rechter Stick) für Bewegung
     const ax0 = gp.axes[0] ?? 0;
-    if (ax0 < -DZ) inp.left  = true;
-    if (ax0 >  DZ) inp.right = true;
+    const ax2 = gp.axes[2] ?? 0;
+    if (ax0 < -DZ || ax2 < -DZ) inp.left  = true;
+    if (ax0 >  DZ || ax2 >  DZ) inp.right = true;
     // D-pad buttons (standard mapping: 14=left, 15=right, 12=up, 13=down)
     if (gp.buttons[14]?.pressed || gp.buttons[14]?.value > 0.5) inp.left  = true;
     if (gp.buttons[15]?.pressed || gp.buttons[15]?.value > 0.5) inp.right = true;
-    for (let bi = 0; bi < gp.buttons.length; bi++) {
-      if (bi >= 12 && bi <= 17) continue;
+    // D-Pad Up + alle Face-/Schulter-Buttons (0–11) zählen als Flap
+    if (gp.buttons[12]?.pressed) { flapK = true; anyK = true; }
+    for (let bi = 0; bi < Math.min(gp.buttons.length, 12); bi++) {
       if (gp.buttons[bi]?.pressed || gp.buttons[bi]?.value > 0.5) { flapK=true; anyK=true; break; }
     }
   }
@@ -750,22 +767,24 @@ function mkVaseSpawnAt(ti, x, y) {
 }
 
 const LEVEL_COUNTS = [
-  [0,1],          // level 1: warm-up
-  [0,1],          // level 2: + Troll-Hand
-  [2,2,2],        // level 3: 3 Banditen
-  [0,1,3],        // level 4: einfache Ritter + 1 Cyclop (sanfter Einstieg)
-  [0,0,1,1,3],    // level 5: mehr Ritter, gemischt + 1 Cyclop
-  [2,2,2,3,3],    // level 6: Banditen + 2 Cyclopen (Peak)
+  [0,1],          // L1 Das Erwachen
+  [0,1],          // L2 Die Brennende Hand: + Troll-Hand
+  [0,0,1,1],      // L3 Der Drache erwacht: bunte Ritter + Drache
+  [2,2,2],        // L4 Die Banditen
+  [0,1,3],        // L5 Der Einäugige: einfache Ritter + 1 Cyclop
+  [0,0,1,1,3],    // L6 Die Höhle des Cyclops: gemischt + 1 Cyclop
+  [2,2,2,3,3],    // L7 Die Zwei Türme: Banditen + 2 Cyclopen (Peak)
 ];
 
 // Spielbare Level-Namen für Übergangs-Overlay
 const LEVEL_NAMES = [
-  'Das Erwachen',         // L1
-  'Die Brennende Hand',   // L2
-  'Der Drache erwacht',   // L3
-  'Der Einäugige',        // L4
-  'Die Höhle des Cyclops',// L5
-  'Die Zwei Türme',       // L6
+  'Das Erwachen',          // L1
+  'Die Brennende Hand',    // L2
+  'Der Drache erwacht',    // L3
+  'Die Banditen',          // L4
+  'Der Einäugige',         // L5
+  'Die Höhle des Cyclops', // L6
+  'Die Zwei Türme',        // L7
 ];
 function getLevelName(lvl) {
   if (lvl <= LEVEL_NAMES.length) return LEVEL_NAMES[lvl - 1];
@@ -1018,15 +1037,15 @@ function boomFeathers(x, y, enemyTi) {
   // Cyclop-Tod gibt Münzen, sonst Federn (weiss bei Rittern, braun bei Banditen)
   if (enemyTi === 3) { boomCoins(x, y, 16); return; }
   const key = ETYPES[enemyTi]?.feather ?? 'featherKnight';
-  for (let i=0; i<22; i++) {
+  for (let i=0; i<18; i++) {
     const a=Math.random()*Math.PI*2, s=3+Math.random()*9;
-    const l=80+Math.random()*50;
+    const l=65+Math.random()*40;
     particles.push({
       x, y,
       vx: Math.cos(a)*s, vy: Math.sin(a)*s - 5,
       life:l, maxLife:l,
       imgKey: key,
-      scale: 0.55 + Math.random()*0.85,
+      scale: 0.35 + Math.random()*0.45,
       rot:   Math.random()*Math.PI*2,
       rotSpd:(Math.random()-0.5)*0.25,
     });
@@ -1061,7 +1080,7 @@ let proLevelResetting = false;
 let proRocks = [];  // fliegende Felsen im Prolevel
 let roundWave = 0;  // how many waves have been completed this round
 // How many waves of enemies per level (more waves = longer level)
-const LEVEL_WAVES = [3, 3, 3, 2, 2, 2, 2];
+const LEVEL_WAVES = [3, 3, 3, 2, 2, 2, 2, 2];
 
 function initGame() {
   score=0; lives=3; eggs=[]; particles=[]; vaseSpawns=[]; proRocks=[]; level=START_LEVEL; levelTransition=0; paused=false;
@@ -1802,6 +1821,8 @@ function drawNameSelect() {
   // Hinweis-Zeile
   ctx.fillStyle = '#999999'; ctx.font = '22px monospace';
   ctx.fillText('Pfeiltasten · Enter zum Bestätigen · oder einfach klicken', W/2, H - 60);
+  // Gamepad-Debug ist auch hier sichtbar
+  drawGamepadDebug();
   ctx.textAlign = 'left';
 }
 
@@ -1985,7 +2006,30 @@ function drawTitle() {
   ctx.fillText('DRÜCKE EINE TASTE ZUM STARTEN', W/2, H - 60);
   ctx.shadowBlur=0;
   ctx.globalAlpha=1;
+
+  // Gamepad-Debug-Anzeige – zeigt erkannte Pads, Achsen und gedrückte Buttons
+  drawGamepadDebug();
+
   ctx.textAlign='left';
+}
+
+function drawGamepadDebug() {
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  const lines = gpDebug.length === 0
+    ? ['Gamepad: keiner erkannt (drück einen Button am Pad damit Browser ihn sieht)']
+    : gpDebug.map(g => `GP${g.idx}: ${g.name}  ax0=${g.ax0} ax1=${g.ax1} btn=${g.btn<0?'-':g.btn}${g.skipped?'  [SKIP]':''}`);
+  const lineH = 22;
+  const boxW = 1100, boxH = lines.length * lineH + 16;
+  ctx.fillRect(20, 20, boxW, boxH);
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    ctx.fillStyle = lines[i].includes('[SKIP]') ? '#FF6666'
+                  : lines[i].includes('btn=-') ? '#AAAAAA'
+                  : '#88FF88';
+    ctx.fillText(l, 32, 42 + i * lineH);
+  }
 }
 
 // ── Main loop ────────────────────────────────────────────────
