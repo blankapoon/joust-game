@@ -464,6 +464,11 @@ function readInput() {
   let flapK = !!(keys[' '] || keys['ArrowUp'] || keys['w'] || keys['W']);
   let anyK  = flapK || inp.left || inp.right || !!keys['Enter'];
 
+  // Menü-relevante Buttons (Tastatur startet, Gamepad ergänzt darunter)
+  let upDown    = !!keys['ArrowUp'];
+  let downDown  = !!keys['ArrowDown'];
+  let enterDown = !!keys['Enter'];
+
   // Skip fake gamepads (headsets melden sich oft als Gamepad)
   const SKIP_IDS = ['poly', 'bt700', 'headset', 'audio', 'headphone'];
   const gpList = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -489,16 +494,21 @@ function readInput() {
     if (skipped) continue;
 
     const DZ = 0.25;
-    // Stick (axes[0]) und manchmal axes[2] (rechter Stick) für Bewegung
+    // Stick (axes[0]/axes[2]) für links/rechts, axes[1] für Menü-up/down
     const ax0 = gp.axes[0] ?? 0;
+    const ax1 = gp.axes[1] ?? 0;
     const ax2 = gp.axes[2] ?? 0;
     if (ax0 < -DZ || ax2 < -DZ) inp.left  = true;
     if (ax0 >  DZ || ax2 >  DZ) inp.right = true;
-    // D-pad buttons (standard mapping: 14=left, 15=right, 12=up, 13=down)
+    if (ax1 < -DZ) upDown   = true;
+    if (ax1 >  DZ) downDown = true;
+    // D-pad buttons (standard mapping: 12=up, 13=down, 14=left, 15=right)
     if (gp.buttons[14]?.pressed || gp.buttons[14]?.value > 0.5) inp.left  = true;
     if (gp.buttons[15]?.pressed || gp.buttons[15]?.value > 0.5) inp.right = true;
-    // D-Pad Up + alle Face-/Schulter-Buttons (0–11) zählen als Flap
-    if (gp.buttons[12]?.pressed) { flapK = true; anyK = true; }
+    if (gp.buttons[13]?.pressed || gp.buttons[13]?.value > 0.5) downDown  = true;
+    // D-Pad Up + alle Face-/Schulter-Buttons (0–11) zählen als Flap; A (0)/Start (9) auch als Enter
+    if (gp.buttons[12]?.pressed) { flapK = true; anyK = true; upDown = true; }
+    if (gp.buttons[0]?.pressed || gp.buttons[9]?.pressed || gp.buttons[7]?.pressed) enterDown = true;
     for (let bi = 0; bi < Math.min(gp.buttons.length, 12); bi++) {
       if (gp.buttons[bi]?.pressed || gp.buttons[bi]?.value > 0.5) { flapK=true; anyK=true; break; }
     }
@@ -509,19 +519,14 @@ function readInput() {
   const skipDown = !!(keys['s'] || keys['S']);
   inp.skipEdge = skipDown && !prev.skip;
   prev.skip = skipDown;
-  // Edge-Erkennung für Menü-Navigation
-  const upDown    = !!(keys['ArrowUp']);
-  const downDown  = !!(keys['ArrowDown']);
-  const leftDown  = !!(keys['ArrowLeft']  || keys['a'] || keys['A']);
-  const rightDown = !!(keys['ArrowRight'] || keys['d'] || keys['D']);
-  const enterDown = !!(keys['Enter']);
+  // Edge-Erkennung für Menü-Navigation – nutzt inp.left/right (inkl. Gamepad-Stick)
   inp.upEdge    = upDown    && !prev.up;
   inp.downEdge  = downDown  && !prev.down;
-  inp.leftEdge  = leftDown  && !prev.left;
-  inp.rightEdge = rightDown && !prev.right;
+  inp.leftEdge  = inp.left  && !prev.left;
+  inp.rightEdge = inp.right && !prev.right;
   inp.enterEdge = enterDown && !prev.enter;
   prev.up = upDown; prev.down = downDown;
-  prev.left = leftDown; prev.right = rightDown; prev.enter = enterDown;
+  prev.left = inp.left; prev.right = inp.right; prev.enter = enterDown;
 }
 
 // ── Physics ──────────────────────────────────────────────────
