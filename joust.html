@@ -201,6 +201,25 @@ function fadeAudio(audio, toVol, ms) {
   }, dt);
 }
 
+// Audio einmalig bei erster echter User-Geste freischalten (Gamepad zählt NICHT
+// als Geste → ohne dieses Priming bleiben SFX stumm wenn man nur per Pad spielt).
+let audioPrimed = false;
+function primeAudio() {
+  if (audioPrimed) return;
+  audioPrimed = true;
+  try { getSfxAC().resume(); } catch (e) {}
+  const banks = [...SND_FLAP, ...SND_HIT, SND_DRAGON, SND_DRAGON_ROAR,
+                 SND_FALL, SND_LOSE, SND_LEVEL_WIN, SND_VASE_SPAWN,
+                 SND_CYCLOP_IDLE, SND_CYCLOP_THROW];
+  for (const a of banks) {
+    a.muted = true;
+    a.play().then(() => { a.pause(); a.currentTime = 0; a.muted = false; })
+            .catch(() => { a.muted = false; });
+  }
+}
+window.addEventListener('keydown',     primeAudio);
+window.addEventListener('pointerdown', primeAudio);
+
 function ensureAudio() {}   // kept for compatibility
 function startMusic() {
   fadeAudio(titleMusic, 0, 1500);
