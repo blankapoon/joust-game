@@ -375,7 +375,7 @@ function spawnDragon() {
 
 function updateDragon() {
   if (!dragon) {
-    if (level < 2) return;  // kein Drache in Level 1
+    if (level < 3) return;  // Drache erwacht erst ab Level 3
     dragonCooldown--;
     if (dragonCooldown === 420) {  // 7s vor Ankunft
       const c = SND_DRAGON_ROAR.cloneNode(); c.volume=SND_DRAGON_ROAR.volume; c.play().catch(()=>{});
@@ -462,7 +462,8 @@ function readInput() {
   let flapK = !!(keys[' '] || keys['ArrowUp'] || keys['w'] || keys['W']);
   let anyK  = flapK || inp.left || inp.right || !!keys['Enter'];
 
-  // Skip fake gamepads (headsets, unknown BT devices)
+  // Skip fake gamepads (headsets, unknown BT devices). Mehrere Pads parallel auswerten
+  // (kein break) – sonst geht der zweite angeschlossene Controller nicht.
   const SKIP_IDS = ['poly', 'bt700', 'headset', 'audio', 'headphone'];
   const gpList = navigator.getGamepads ? navigator.getGamepads() : [];
   for (let gi = 0; gi < gpList.length; gi++) {
@@ -471,7 +472,7 @@ function readInput() {
     const id = gp.id.toLowerCase();
     if (SKIP_IDS.some(s => id.includes(s))) continue;  // skip non-gamepads
 
-    const DZ = 0.50;
+    const DZ = 0.30;
     // Only axis 0 = horizontal (left/right). Iterating all axes causes drift
     // because trigger/secondary axes rest at +1.0 on many gamepads.
     const ax0 = gp.axes[0] ?? 0;
@@ -484,7 +485,6 @@ function readInput() {
       if (bi >= 12 && bi <= 17) continue;
       if (gp.buttons[bi]?.pressed || gp.buttons[bi]?.value > 0.5) { flapK=true; anyK=true; break; }
     }
-    break;
   }
   inp.flapEdge = flapK && !prev.flap;
   inp.anyEdge  = anyK  && !prev.any;
@@ -762,7 +762,7 @@ const LEVEL_COUNTS = [
 const LEVEL_NAMES = [
   'Das Erwachen',         // L1
   'Die Brennende Hand',   // L2
-  'Banditen-Sturm',       // L3
+  'Der Drache erwacht',   // L3
   'Der Einäugige',        // L4
   'Die Höhle des Cyclops',// L5
   'Die Zwei Türme',       // L6
@@ -1007,7 +1007,7 @@ function boomCoins(x, y, n) {
       vx: Math.cos(a)*s, vy: Math.sin(a)*s - 6,
       life:l, maxLife:l,
       coin: true,
-      scale: 0.7 + Math.random()*0.6,
+      scale: 0.45 + Math.random()*0.35,
       rot:   Math.random()*Math.PI*2,
       rotSpd:(0.20 + Math.random()*0.25) * (Math.random()<0.5 ? -1 : 1),
     });
@@ -1609,8 +1609,8 @@ function drawParticles() {
   for (const p of particles) {
     ctx.globalAlpha = p.life / p.maxLife;
     if (p.coin) {
-      const r = 14 * p.scale;
-      const w = Math.max(2, Math.abs(Math.cos(p.rot)) * r * 2);   // Rotation um vertikale Achse
+      const r = 7 * p.scale;
+      const w = Math.max(1.5, Math.abs(Math.cos(p.rot)) * r * 2);   // Rotation um vertikale Achse
       ctx.save();
       ctx.translate(~~p.x, ~~p.y);
       // Münze: gold gradient mit dunklem Rand
