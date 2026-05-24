@@ -294,8 +294,8 @@ let summaryData = null;
 let bonusLifeFlash = 0;          // frames remaining for "BONUS LEBEN" text flash
 let spawnQueue = [];             // pending enemy ti values, drained über updateSpawnQueue
 let spawnTimer = 0;              // frames bis nächster Spawn
-const SPAWN_INTERVAL_DEFAULT = 120;  // 2s zwischen normalen Gegner-Spawns
-const SPAWN_INTERVAL_CYCLOP  = 180;  // 3s zwischen 2 Cyclopen
+const SPAWN_INTERVAL_DEFAULT = 60;   // 1s zwischen normalen Gegner-Spawns
+const SPAWN_INTERVAL_CYCLOP  = 120;  // 2s zwischen 2 Cyclopen
 
 // ── Hall of Fame & Name-Auswahl ──────────────────────────────
 const PLAYER_NAMES = ['Danny', 'Helmut', 'Stephan', 'Rüdi', 'Micha', 'Andy', 'Holger', 'André'];
@@ -706,7 +706,9 @@ function updateVaseSpawns() {
       if (v.videoEnded) v.phase = 'done';
     }
     if (v.phase === 'done') {
-      const e = mkEnemy(v.ti, v.spawnX, v.spawnY);
+      // Ab Level 5 spawnen aus Vasen nur noch rote Ritter
+      const spawnTi = (level >= 5) ? 1 : v.ti;
+      const e = mkEnemy(spawnTi, v.spawnX, v.spawnY);
       e.vy = -12;
       enemies.push(e);
       if (v.video) { v.video.pause(); v.video = null; }
@@ -1628,25 +1630,23 @@ function drawHUD() {
   ctx.fillText('► ' + currentPlayer + ' ◄', W/2, 46);
   ctx.textAlign='left'; ctx.font='bold 36px serif';
 
-  // Lives — Icons skalieren dynamisch, damit auch viele Leben reinpassen
+  // Lives — ein Icon + ×N (kompakter, skaliert nicht mit Lebenanzahl)
   ctx.textAlign='right';
   ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(W-360,14,340,52);
-  ctx.fillStyle='#FFFFFF'; ctx.fillText('LEBEN:', W-200, 52);
-  const LIFE_AVAIL_W = 175;   // verfügbare Breite rechts von "LEBEN:"
-  const LIFE_MAX_PITCH = 58;
-  const lifePitch = lives > 0 ? Math.min(LIFE_MAX_PITCH, LIFE_AVAIL_W / lives) : LIFE_MAX_PITCH;
-  const lifeScale = lifePitch / LIFE_MAX_PITCH;
-  const lifeIconW = Math.round(52 * lifeScale);
-  const lifeIconH = Math.round(64 * lifeScale);
+  ctx.fillStyle='#FFFFFF'; ctx.fillText('LEBEN:', W-220, 52);
+  const lifeIconW = 52;
+  const lifeIconH = 64;
   const lifeIconY = 14 + (52 - lifeIconH) / 2;
-  for (let i=0; i<lives; i++) {
-    const img = getImg('blueBase');
-    const x = W - 185 + i * lifePitch;
-    if (img) ctx.drawImage(img, x, lifeIconY, lifeIconW, lifeIconH);
-    else {
-      ctx.fillStyle='#4466FF'; ctx.fillRect(x, lifeIconY + 4, lifeIconW - 6, lifeIconH - 16);
-    }
+  const lifeIconX = W - 200;
+  const img = getImg('blueBase');
+  if (img) ctx.drawImage(img, lifeIconX, lifeIconY, lifeIconW, lifeIconH);
+  else {
+    ctx.fillStyle='#4466FF'; ctx.fillRect(lifeIconX, lifeIconY + 4, lifeIconW - 6, lifeIconH - 16);
   }
+  ctx.textAlign='left';
+  ctx.fillStyle='#FFD700'; ctx.font='bold 38px monospace';
+  ctx.fillText('×' + lives, lifeIconX + lifeIconW + 8, 52);
+  ctx.font='bold 36px serif';
 
   // ── BONUS LEBEN Flash ────────────────────────────────────────
   if (bonusLifeFlash > 0) {
