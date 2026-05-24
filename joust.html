@@ -680,7 +680,7 @@ function updateVaseSpawns() {
         totalVasesCollected++;
         if (totalVasesCollected % 7 === 0) { lives++; playBonusLife(); bonusLifeFlash = 120; boom(player.x+player.w/2, player.y, 20, ['#FFD700','#FFFFFF','#FF88FF','#00FFFF']); }
         sfxEgg();
-        boom(v.spawnX + ENT_W/2, v.spawnY + ENT_H - VASE_H/2, 10, ['#FFD700','#FFAA00','#FF8800']);
+        boomCoins(v.spawnX + ENT_W/2, v.spawnY + ENT_H - VASE_H/2, 10);
         if (v.video) { v.video.pause(); v.video = null; }
         vaseSpawns.splice(i, 1);
         continue;
@@ -975,7 +975,7 @@ function updateEggs() {
       if (eg.fromSit) roundVasesCollected++;
       totalVasesCollected++;
       if (totalVasesCollected % 7 === 0) { lives++; playBonusLife(); bonusLifeFlash = 120; boom(player.x+player.w/2, player.y, 20, ['#FFD700','#FFFFFF','#FF88FF','#00FFFF']); }
-      boom(eg.x+eg.w/2,eg.y+eg.h/2,12,['#FFFF00','#FFCC00']);
+      boomCoins(eg.x+eg.w/2,eg.y+eg.h/2,12);
       sfxEgg(); eggs.splice(i,1); continue;
     }
     if (eg.timer >= eg.maxTimer) {
@@ -997,9 +997,9 @@ function boom(x, y, n, colors) {
                     color:colors[i%colors.length]});
   }
 }
-function boomFeathers(x, y, enemyTi) {
-  // Goldmünzen die sich drehen – ersetzt frühere Feder-Partikel beim Feindtöten
-  for (let i=0; i<14; i++) {
+function boomCoins(x, y, n) {
+  // Drehende Goldmünzen – für Cyclop-Tod & Vasen-Pickup
+  for (let i=0; i<n; i++) {
     const a=Math.random()*Math.PI*2, s=4+Math.random()*8;
     const l=55+Math.random()*35;
     particles.push({
@@ -1010,6 +1010,25 @@ function boomFeathers(x, y, enemyTi) {
       scale: 0.7 + Math.random()*0.6,
       rot:   Math.random()*Math.PI*2,
       rotSpd:(0.20 + Math.random()*0.25) * (Math.random()<0.5 ? -1 : 1),
+    });
+  }
+}
+
+function boomFeathers(x, y, enemyTi) {
+  // Cyclop-Tod gibt Münzen, sonst Federn (weiss bei Rittern, braun bei Banditen)
+  if (enemyTi === 3) { boomCoins(x, y, 16); return; }
+  const key = ETYPES[enemyTi]?.feather ?? 'featherKnight';
+  for (let i=0; i<18; i++) {
+    const a=Math.random()*Math.PI*2, s=3+Math.random()*9;
+    const l=45+Math.random()*40;
+    particles.push({
+      x, y,
+      vx: Math.cos(a)*s, vy: Math.sin(a)*s - 5,
+      life:l, maxLife:l,
+      imgKey: key,
+      scale: 0.25 + Math.random()*0.65,
+      rot:   Math.random()*Math.PI*2,
+      rotSpd:(Math.random()-0.5)*0.25,
     });
   }
 }
